@@ -2,5 +2,5 @@
 // 비워 두면 기록은 교육생 기기에만 보관된다 (claude.ai 게시 페이지에서는 공유 기록을 쓴다).
 // 만드는 방법: docs/관리자-기록-구글시트.md
 window.SIM_CONFIG = {
-  recordUrl: "",
+  recordUrl: "https://script.google.com/macros/s/AKfycbxSUsjVyCt2zhFCqf_p3a1w1pdjIuXMMla_ACCj2RDj4nYrofBzBvlVnXBHhTOySWG2/exec",
 };
