@@ -154,6 +154,15 @@ code, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .fcsvg .port:focus-visible { outline: none; }
 .fcsvg .port.used .sock { fill: #40c2a4; stroke: #1c7a64; }
 .fcsvg .port.used .pin { fill: #0b3a30; }
+.fcsvg .port.fit .sock { stroke: #ffd45e; stroke-width: 3; }
+.fcsvg .port.far { opacity: 0.4; }
+.fcsvg .plabel.dark { fill: #2a2a22; font-weight: 600; font-size: 11px; }
+.fcsvg .plabel.big { font-size: 12px; }
+.fcsvg .plabel.outer { fill: var(--muted); }
+.pdbsvg .pcb { fill: #143d2c; stroke: #2f6b52; }
+.pdbsvg .sock.xt { fill: #f2c230; stroke: #8a6c10; }
+.pdbsvg .port.used .sock.xt { fill: #40c2a4; }
+.fchint { margin: 0; font-size: 13px; color: var(--muted); }
 .tray { width: 250px; flex: none; display: flex; flex-direction: column; gap: 4px; }
 .tray h3 { margin: 0 0 2px; font-size: 12px; color: var(--muted); letter-spacing: 0.04em; }
 .cable { display: grid; grid-template-columns: 50px 1fr; gap: 2px 8px; align-items: center; text-align: left; border: 1px solid var(--line); background: none; padding: 6px 8px; border-radius: 8px; cursor: pointer; font-size: 12.5px; }

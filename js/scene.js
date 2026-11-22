@@ -752,6 +752,9 @@ const BIND_MSG = { held: "바인드 버튼을 누르고 있습니다. 이 상태
     else { const c = tipCable(tip); if (c) w.plug[c] = ""; }
   }
   const tipCableOf = (t) => tipCable(t);
+  // 하판(PDB)에 꽂는 선: ESC 전원선·통신선, PMU 출력선, 배터리 선
+  function pdbCable(tip) { const pt = SIM.part(tip.part); return !!pt && ((pt.type === "esc" && (tip.key === "pwr" || tip.key === "tel")) || (pt.type === "pm" && tip.key === "out") || (pt.type === "battery" && tip.key === "xt")); }
+  sc.pdbCable = pdbCable;
   function tipCable(tip) {
     if (tip.key === "harness") return "escTelem";
     const part = SIM.part(tip.part);
@@ -828,12 +831,15 @@ const BIND_MSG = { held: "바인드 버튼을 누르고 있습니다. 이 상태
       if (!c) return say("이 선은 FC에 꽂지 않습니다.");
       if (SIM.CABLES[c].conn !== SIM.portType(tg.port)) return say("커넥터 모양이 맞지 않아 " + tg.port + "에 들어가지 않습니다.");
       SIM.setPlug(c, tg.port); ok("plug"); restoreCam();
-    } else if (tg.kind === "fc") { // 선을 든 채 FC를 누르면 FC를 크게 보여 주고, 포트를 고르게 한다
+    } else if (tg.kind === "fc") { // 선을 든 채 FC를 누르면 FC 세부 보기(포트 배치)를 열어 꽂을 포트를 고르게 한다
       const c = tipCable(tip);
       if (!c) return say("이 선은 FC에 꽂지 않습니다.");
       if (SIM.has("canopy") && /^deck:/.test(SIM.state.install.fc || "")) return say("케이스를 먼저 벗기세요.");
-      zoomFc(); sc._keep = true; sc.wireDrag = false;
-      SIM.toast("꽂을 포트를 누르세요");
+      sc.cancelPick(); if (sc.onFcCable) sc.onFcCable(c, true); SIM.emit();
+      return;
+    } else if (tg.kind === "pdb") { // 하판에 꽂는 선을 든 채 하판을 누르면 PDB 세부 보기에서 자리를 고른다
+      if (!pdbCable(tip)) return say("이 선은 하판(PDB)에 꽂지 않습니다.");
+      sc.cancelPick(); if (sc.onPdbCable) sc.onPdbCable(tip); SIM.emit();
       return;
     }
     sc.cancelPick(); SIM.emit();
@@ -869,7 +875,6 @@ const BIND_MSG = { held: "바인드 버튼을 누르고 있습니다. 이 상태
       }
       const see = sc.xray || !!sc.pick;
       if (sc.pick && /^(ph\d|pad[ABC])$/.test(sc.pick.key)) { const np = nearestPhase(e.clientX, e.clientY); if (np) return { target: np, point: null }; }
-      if (sc.pick && sc.fcZoom && tipCableOf(sc.pick)) { const np = nearestPort(e.clientX, e.clientY); if (np) return { target: np, point: null }; } // 확대했을 때만 가장 가까운 포트로
       let soft = null; // 넉넉한 클릭 영역(작은 부품·선): 바로 뒤에 단자·선 끝이 있으면 그쪽을 고른다
       const hard = (h, res) => res; // 선 끝·단자·포트는 넓은 클릭 영역(부품 상자·선·판)에 가려지지 않는다
       const fcCableTip = (t) => { const pt = SIM.part(t.part); return pt && (["pm", "gps", "rx", "telem", "buzzer", "switch"].includes(pt.type) && ["fc", "gps", "compass", "sig"].includes(t.key)); };
@@ -900,6 +905,12 @@ const BIND_MSG = { held: "바인드 버튼을 누르고 있습니다. 이 상태
         return { frame: true, point: h.point };
       }
       if (soft) return soft.res;
+      // 선을 든 채 FC·하판 근처를 누르면 세부 보기 (작은 포트를 정확히 누르지 않아도 된다)
+      if (sc.pick) {
+        const groups = (ids) => ids.filter((id) => objs[id]).map((id) => objs[id].group);
+        if (tipCableOf(sc.pick)) { const fh = ray.intersectObjects(groups(["fc"]), true).find((x) => x.object.visible); if (fh) return { target: { kind: "fc", part: "fc", label: "비행 컨트롤러 · 포트 고르기" }, point: fh.point }; }
+        if (pdbCable(sc.pick) && SIM.state.install.frameBot) { const ids = ["frameBot"]; if (SIM.state.install.frameTop) ids.push("frameTop"); for (const p of SIM.PARTS) if (/^bot:/.test(SIM.state.install[p.id] || "")) ids.push(p.id); const ph = ray.intersectObjects(groups(ids), true).find((x) => x.object.visible); if (ph) return { target: { kind: "pdb", part: "frameBot", label: "하판(PDB) · 자리 고르기" }, point: ph.point }; }
+      }
       return { point: ray.ray.intersectPlane(plane, hitP) ? hitP.clone() : null };
     }
     const canEdit = () => sc.env === "bench" && !sc.dragDrone && !SIM.flight.active;
