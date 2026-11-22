@@ -19,6 +19,8 @@
     </nav>
     <div class="status" aria-live="polite">
       <button type="button" id="admin-btn" class="btn" data-act="adminOpen" hidden>기록 관리</button>
+      <button type="button" id="exam-btn" class="btn" data-act="examBuilder" hidden>시험 만들기</button>
+      <button type="button" id="symptom-btn" class="btn primary" data-act="symptoms" hidden>증상</button>
       <span id="trainee" class="trainee"></span>
       <span id="timer" class="timer" aria-label="경과 시간">00:00</span>
     </div>
@@ -33,6 +35,7 @@
       <div id="txview" class="txview" hidden></div>
       <div id="fcview" class="fcview" hidden></div>
       <div id="pdbview" class="fcview" hidden></div>
+      <div id="rxview" class="fcview" hidden></div>
       <div id="tx" class="tx" hidden>
         <div class="stickwrap"><div id="stickL" class="stick" aria-label="왼쪽 스틱: 스로틀·요"><i></i></div><span>스로틀 · 요</span></div>
         <div class="txmid">
@@ -57,6 +60,7 @@
   <div class="intro-card">
     <p class="intro-kicker">교육용 3D 정비 실습</p>
     <h2 class="intro-title">드론 조립과 정비 시뮬레이터</h2>
+    <p id="intro-exam" class="intro-exam" hidden></p>
     <form id="intro-form" class="intro-form" autocomplete="off">
       <label for="trainee-name">이름</label>
       <div class="intro-row"><input id="trainee-name" type="text" maxlength="30" placeholder="이름을 입력하세요" required><button type="submit" class="btn primary">확인</button></div>
@@ -66,6 +70,7 @@
       <button type="button" id="intro-start" class="startbtn" data-act="sessionStart">START</button>
       <button type="button" class="btn ghost" data-act="sessionRename">이름 다시 입력</button>
     </div>
+    <button type="button" id="intro-admin" class="btn ghost intro-admin" data-act="examBuilder" hidden>관리자 · 고장 진단 시험 만들기</button>
   </div>
 </div>
 <div id="finish" class="modal" hidden><div class="modal-card" id="finish-card"></div></div>

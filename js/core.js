@@ -617,12 +617,14 @@
   SIM.resetAll = () => { SIM.state = defaults(); SIM.selected = null; SIM.faults = null; SIM.emit(); };
 
   // ---------- 고장 진단 훈련 ----------
-  const pick = (a) => a[Math.floor(Math.random() * a.length)];
+  let rnd = Math.random; // 시험 링크로 열면 같은 고장 위치가 나오도록 씨앗 있는 난수로 바꾼다
+  const seeded = (seed) => () => { seed |= 0; seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  const pick = (a) => a[Math.floor(rnd() * a.length)];
   const adj = () => { const a = pick(["FR", "RL"]), b = pick(["RR", "FL"]); return [a, b]; };
   const swapSlots = (ta, tb) => { const i = SIM.state.install, pa = SIM.partAt(ta), pb = SIM.partAt(tb); i[pa.id] = tb; i[pb.id] = ta; };
   const FAULTS = [
     () => { const a = pick(SIM.POS_IDS), m = SIM.state.wiring.motorWires[a], t = m[1]; m[1] = m[2]; m[2] = t; return { desc: SIM.POS[a].name + " 모터선 두 가닥이 바뀌어 반대로 돕니다.", present: () => SIM.motorDir(a) !== SIM.expected()[a].spin }; },
-    () => { const a = pick(SIM.POS_IDS); SIM.state.wiring.motorWires[a][1 + Math.floor(Math.random() * 3)] = ""; return { desc: SIM.POS[a].name + " 모터선 한 가닥이 ESC에서 빠져 있습니다.", present: () => SIM.motorWiring(a) !== SIM.expected()[a].spin }; },
+    () => { const a = pick(SIM.POS_IDS); SIM.state.wiring.motorWires[a][1 + Math.floor(rnd() * 3)] = ""; return { desc: SIM.POS[a].name + " 모터선 한 가닥이 ESC에서 빠져 있습니다.", present: () => SIM.motorWiring(a) !== SIM.expected()[a].spin }; },
     () => { const [a, b] = adj(), w = SIM.state.wiring, t = w.plug["esc" + a]; w.plug["esc" + a] = w.plug["esc" + b]; w.plug["esc" + b] = t; return { desc: SIM.POS[a].name + "과 " + SIM.POS[b].name + " ESC 신호선이 서로 바뀌어 꽂혀 있습니다.", present: () => [a, b].some((x) => SIM.motorNumForPos(x) !== SIM.expected()[x].num) }; },
     () => { const [a, b] = adj(); swapSlots("prop@" + a, "prop@" + b); return { desc: SIM.POS[a].name + "과 " + SIM.POS[b].name + "의 프로펠러 종류가 서로 바뀌어 달려 있습니다.", present: () => [a, b].some((x) => { const p = SIM.partAt("prop@" + x); return !p || p.dir !== SIM.expected()[x].spin; }) }; },
     () => { const a = pick(SIM.POS_IDS), pr = SIM.partAt("prop@" + a); SIM.state.flip[pr.id] = true; return { desc: SIM.POS[a].name + " 프로펠러가 뒤집혀 끼워져 있습니다.", present: () => { const p = SIM.partAt("prop@" + a); return !!p && SIM.state.flip[p.id]; } }; },
@@ -630,7 +632,7 @@
     () => { const a = pick(SIM.POS_IDS); SIM.state.wiring.escPwr[a] = ""; return { desc: SIM.POS[a].name + " ESC의 XT60 전원 커넥터가 PDB에서 빠져 있습니다.", present: () => !SIM.escPowered(a) }; },
     () => { SIM.state.rot.fc = pick([1, 2, 3]); return { desc: "FC가 돌아간 방향으로 장착되어 있는데 AHRS_ORIENTATION 보정이 없습니다.", present: () => Math.abs(Math.sin(SIM.mountErr() / 2)) > 0.01 }; },
     () => { const i = SIM.state.install; i.rx = "bot:C"; i.fc = "deck:L"; return { desc: "FC가 상판 중앙이 아닌 상판 왼쪽에 장착되어 있습니다.", present: () => SIM.fcOffCenter() }; },
-    () => { const i = SIM.state.install, t = i.telem; i.telem = "bot:C"; i.gps = t; return { desc: "GPS·나침반 모듈이 마스트가 아닌 상판 위에 직접 장착되어 있습니다 (자기 간섭).", present: () => SIM.gpsOffMast() }; },
+    () => { const i = SIM.state.install, t = i.telem; i.telem = "bot:R"; i.gps = t; return { desc: "GPS·나침반 모듈이 마스트가 아닌 상판 위에 직접 장착되어 있습니다 (자기 간섭).", present: () => SIM.gpsOffMast() }; },
     () => { SIM.state.rot.gps = 2; return { desc: "GPS·나침반 모듈이 뒤를 향해 장착되어 있습니다.", present: () => Math.abs(Math.sin(SIM.headingErr() / 2)) > 0.01 }; },
     () => { SIM.state.wiring.plug.rx = "SBUS OUT"; return { desc: "수신기 신호선이 RC IN이 아닌 SBUS OUT 포트에 꽂혀 있습니다.", present: () => !SIM.rxOk() }; },
     () => { SIM.state.wiring.rxRevFc = true; return { desc: "수신기 3선 커넥터가 FC 쪽에서 반대로 꽂혀 있습니다.", present: () => !SIM.rxOk() }; },
@@ -645,6 +647,40 @@
     () => { SIM.state.params.FRAME_TYPE = 0; return { desc: "FRAME_TYPE이 Plus로 설정되어 있습니다 (기체는 X형).", present: () => SIM.state.params.FRAME_TYPE === 0 }; },
     () => { SIM.state.params.BATT_LOW_VOLT = 0; return { desc: "배터리 저전압 페일세이프가 꺼져 있습니다 (BATT_LOW_VOLT=0).", present: () => !(SIM.state.params.BATT_LOW_VOLT > 0 && SIM.state.params.BATT_FS_LOW_ACT) }; },
   ];
+  // 고장 이름(관리자 출제 화면)과 겉으로 보이는 증상(교육생에게 제시) — FAULTS와 같은 순서
+  SIM.FAULT_INFO = [
+    ["모터선 두 가닥 바뀜 (모터 역회전)", "스로틀을 올리면 이륙 직후 기체가 한쪽으로 뒤집히며 제자리에서 돈다."],
+    ["모터선 한 가닥 빠짐", "시동을 걸면 모터 하나가 덜덜 떨기만 하고 제대로 돌지 않는다."],
+    ["ESC 신호선 두 개 바뀜", "이륙하자마자 기체가 크게 기울어 뒤집힌다. 모터 테스트 순서가 맞지 않는다."],
+    ["프로펠러 종류(CW/CCW) 바뀜", "모터는 정상적으로 도는데 기체가 떠오르지 못하고 한쪽으로 쏠리며 뒤집힌다."],
+    ["프로펠러 뒤집혀 장착", "한쪽 팔의 추력이 약해 기체가 그쪽으로 기운다."],
+    ["모터 종류(축 나사 방향) 바뀜", "점검할 때마다 프로펠러 너트가 풀려 있다."],
+    ["ESC XT60 전원 커넥터 빠짐", "배터리를 연결해도 ESC 하나에서 시동음이 나지 않고, 그 모터만 돌지 않는다."],
+    ["FC 장착 방향과 AHRS_ORIENTATION 불일치", "기체가 수평인데 미션 플래너 수평계가 기울어져 보이고, 기울이면 다른 방향으로 표시된다."],
+    ["FC가 상판 중앙에서 벗어나 장착", "호버링할 때 기체가 한쪽으로 흐르고 자세가 불안정하다."],
+    ["GPS를 마스트 없이 상판에 장착", "기수 방향이 계속 틀어지고 Loiter 모드에서 원을 그리며 돈다."],
+    ["GPS(나침반)가 뒤를 향해 장착", "미션 플래너에 표시되는 기수 방향이 실제와 반대다."],
+    ["수신기 신호선이 SBUS OUT에 꽂힘", "수신기 LED는 초록인데 무선 교정 화면의 막대가 움직이지 않는다."],
+    ["수신기 커넥터 FC 쪽 반대로 꽂힘", "조종기를 켜도 수신기 LED가 켜지지 않는다."],
+    ["수신기 쪽 커넥터가 CH1(PWM) 핀에 꽂힘", "수신기 LED는 켜지지만 FC가 조종 신호를 받지 못한다."],
+    ["수신기 바인딩 안 됨", "수신기 LED가 빨간색이고 조종기와 연결되지 않는다."],
+    ["GPS 케이블이 TELEM 포트에 꽂힘", "GPS 위성이 잡히지 않는다 (No GPS)."],
+    ["안전 스위치 케이블이 ADC 포트에 꽂힘", "안전 스위치를 눌러도 반응이 없어 시동이 걸리지 않는다."],
+    ["PMU 케이블이 SERIAL 4/5에 꽂힘", "배터리만 연결하면 FC가 켜지지 않고, 배터리 전압도 표시되지 않는다."],
+    ["피치 채널 이중 반전 (RC2_REVERSED)", "조종기 피치 스틱을 앞으로 밀면 기체가 뒤로 간다."],
+    ["라디오 페일세이프 꺼짐", "비행 중 조종기를 꺼도 기체가 착륙하거나 귀환하지 않는다."],
+    ["SERVO1·SERVO2 기능 바뀜", "이륙 직후 기체가 뒤집힌다. 모터 테스트에서 돌아가는 모터 순서가 다르다."],
+    ["FRAME_TYPE이 Plus로 설정", "이륙하자마자 기체가 대각선 방향으로 쏠리며 제어되지 않는다."],
+    ["배터리 저전압 페일세이프 꺼짐", "배터리가 거의 다 떨어져도 경고나 자동 착륙이 없다."],
+  ];
+  // 관리자가 낸 고장 진단 시험: 정답대로 조립·설정한 기체에 고른 고장을 심는다 (같은 씨앗이면 같은 위치)
+  SIM.injectFaults = (ids, seed) => {
+    rnd = seeded(seed || 1);
+    try { return ids.filter((i) => FAULTS[i]).map((i) => Object.assign({ id: i, name: SIM.FAULT_INFO[i][0] }, FAULTS[i]())); } finally { rnd = Math.random; }
+  };
+  SIM.startExam = (ids, seed) => { SIM.autoAssemble(); SIM.autoConfigure(); const list = SIM.injectFaults(ids, seed); SIM.motorTest && (SIM.motorTest.results = {}); SIM.emit(); return list; };
+  // 새로고침 뒤: 지금 상태는 그대로 두고 판정용 함수만 다시 만든다
+  SIM.examChecks = (ids, seed) => { const keep = JSON.stringify(SIM.state); SIM.autoAssemble(); SIM.autoConfigure(); const list = SIM.injectFaults(ids, seed); SIM.state = JSON.parse(keep); SIM.emit(); return list; };
   SIM.startFaultDrill = (n) => {
     SIM.autoAssemble(); SIM.autoConfigure();
     const pool = FAULTS.slice(), list = [];

@@ -290,3 +290,18 @@ body:not(.dock) .navgroup { display: none; }
 .admrec .tbl { margin-top: 8px; font-size: 12px; }
 #admin-date { padding: 5px 8px; border-radius: 7px; border: 1px solid var(--line); background: var(--surface-2); }
 .modal-card { width: min(760px, 100%); }
+/* 고장 진단 시험 */
+.modal { z-index: 60; }
+.intro-exam { margin: 0; font-size: 14px; color: var(--muted); }
+.intro-admin { align-self: center; margin-top: 4px; font-size: 13px; }
+.symlist { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 14px; }
+.symlist .sym { margin: 0 0 6px; font-weight: 600; line-height: 1.5; }
+.modal-card textarea, .modal-card input[type=text] { width: 100%; box-sizing: border-box; font: inherit; font-size: 14px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: inherit; }
+.fxlist { display: flex; flex-direction: column; gap: 8px; }
+.fxrow { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; }
+.fxrow label { font-weight: 600; font-size: 14px; display: flex; gap: 8px; align-items: center; }
+.fxrow input[type=checkbox] { width: 18px; height: 18px; }
+.fcsvg .plug3 { fill: #2a2e33; stroke: #ffd45e; stroke-width: 1.5; }
+.rxside { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 8px 0; border-top: 1px solid var(--line); }
+.rxside b { min-width: 70px; }
+.tray .small { font-size: 12px; margin: 0 0 4px; }

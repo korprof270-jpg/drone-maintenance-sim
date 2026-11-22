@@ -837,6 +837,9 @@ const BIND_MSG = { held: "바인드 버튼을 누르고 있습니다. 이 상태
       if (SIM.has("canopy") && /^deck:/.test(SIM.state.install.fc || "")) return say("케이스를 먼저 벗기세요.");
       sc.cancelPick(); if (sc.onFcCable) sc.onFcCable(c, true); SIM.emit();
       return;
+    } else if (tg.kind === "rxDetail") {
+      sc.cancelPick(); if (sc.onRxCable) sc.onRxCable(); SIM.emit();
+      return;
     } else if (tg.kind === "pdb") { // 하판에 꽂는 선을 든 채 하판을 누르면 PDB 세부 보기에서 자리를 고른다
       if (!pdbCable(tip)) return say("이 선은 하판(PDB)에 꽂지 않습니다.");
       sc.cancelPick(); if (sc.onPdbCable) sc.onPdbCable(tip); SIM.emit();
@@ -846,6 +849,7 @@ const BIND_MSG = { held: "바인드 버튼을 누르고 있습니다. 이 상태
   }
   function drawLiveWire(worldPoint, tg) {
     if (!sc.pick) return;
+    { const o = objs[sc.pick.part], k = sc.pick.key; if (!o || !(/^pad[ABC]$/.test(k) ? o.pads[k[3]] : o.tips[k])) return; } // 3D 선 끝이 없는 선(수신기 쪽 핀 등)
     if (tg && tg.kind === "fcPort") worldPoint = drone.localToWorld(fcPortPos(tg.port));
     if (tg && tg.kind === "escPad") worldPoint = objs[tg.part].group.localToWorld(objs[tg.part].pads[tg.pad].clone());
     if (tg && tg.kind === "motorPh") worldPoint = objs[tg.part].group.localToWorld(objs[tg.part].tips["ph" + tg.k].clone());
@@ -874,6 +878,10 @@ const BIND_MSG = { held: "바인드 버튼을 누르고 있습니다. 이 상태
         if (best) return best;
       }
       const see = sc.xray || !!sc.pick;
+      if (sc.pick && sc.pick.part === "rx") { // 수신기 선을 든 채 수신기나 FC를 누르면 수신기↔FC 배선 세부 보기
+        const gs = ["rx", "fc"].filter((id) => objs[id]).map((id) => objs[id].group), rh = ray.intersectObjects(gs, true).find((x) => x.object.visible && x.object !== liveWire);
+        if (rh) return { target: { kind: "rxDetail", label: "수신기 ↔ FC 배선 · 자리 고르기" }, point: rh.point };
+      }
       if (sc.pick && /^(ph\d|pad[ABC])$/.test(sc.pick.key)) { const np = nearestPhase(e.clientX, e.clientY); if (np) return { target: np, point: null }; }
       let soft = null; // 넉넉한 클릭 영역(작은 부품·선): 바로 뒤에 단자·선 끝이 있으면 그쪽을 고른다
       const hard = (h, res) => res; // 선 끝·단자·포트는 넓은 클릭 영역(부품 상자·선·판)에 가려지지 않는다

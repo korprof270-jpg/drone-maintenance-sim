@@ -69,8 +69,7 @@
     if (slot && (p.type === "fc" || p.type === "gps")) b += btn("rotate", "90° 돌리기", "", id);
     if (p.type === "prop") b += btn("flip", "뒤집기", "", id);
     if (slot && p.type === "rx") {
-      b += sel("pop-rxend", "rxEnd", { "": "수신기 쪽 핀 선택", 1: "CH1", 2: "CH2", 3: "CH3", 4: "CH4", 5: "CH5", 6: "CH6", 7: "CH7", 8: "CH8", SB: "SBUS" }, w.rxEnd);
-      b += btn("rxFlip", "수신기 쪽 뒤집어 꽂기", "", "rxRevRx") + btn("rxFlip", "FC 쪽 뒤집어 꽂기", "", "rxRevFc") + btn("bind", "바인딩 버튼 누르기", "primary");
+      b += btn("rxView", "세부 보기 · 수신기↔FC 배선", "primary") + btn("bind", "바인딩 버튼 누르기");
     }
     const nh = SIM.SCREW_HOLES[p.type];
     if (slot && nh) { let tight = 0; for (let i = 0; i < nh; i++) if (SIM.screwTight(SIM.state.screws[id + ":" + i])) tight++; leads = '<li class="' + (SIM.screwCount(id) ? "on" : "") + '"><span>나사</span><span>' + SIM.screwCount(id) + " / " + nh + " (조임 " + tight + ")</span></li>" + leads; }
@@ -167,6 +166,53 @@
     tray += "</div>";
     const hint = ui.cable ? '<p class="fchint"><b>' + esc(SIM.CABLES[ui.cable].name) + "</b>을(를) 꽂을 포트를 누르세요. 모양이 맞는 포트가 밝게 표시됩니다.</p>" : '<p class="fchint">오른쪽에서 케이블을 고른 뒤 포트를 누르세요. 꽂힌 포트를 누르면 뽑힙니다.</p>';
     return '<div class="fchead"><h2>비행 컨트롤러 · Pixhawk 포트 배치</h2>' + btn("fcClose", "닫기") + "</div>" + hint + '<div class="fcbody">' + s + tray + "</div>";
+  }
+
+  // ---------- 수신기 ↔ FC 배선 세부 보기: 수신기 핀(CH1–8·SBUS)과 FC 서보 레일, 3선 커넥터 방향 ----------
+  const RX_PINS = ["1", "2", "3", "4", "5", "6", "7", "8", "SB"];
+  const WIRE = ["#f4f1e6", "#d8342a", "#1d1d1d"]; // 신호(흰)·+(빨)·−(검)
+  function plug3(x, y0, dy, rev, w) { // 핀 위에 꽂힌 3선 커넥터
+    let g = '<rect class="plug3" x="' + (x - w / 2) + '" y="' + (y0 - dy / 2 - 3) + '" width="' + w + '" height="' + (dy * 3 + 6) + '" rx="3"/>';
+    for (let k = 0; k < 3; k++) g += '<circle cx="' + x + '" cy="' + (y0 + k * dy) + '" r="' + Math.min(5, w / 3) + '" style="fill:' + WIRE[rev ? 2 - k : k] + ';stroke:#000;stroke-width:0.6"/>';
+    return g;
+  }
+  function rxViewHtml() {
+    const w = SIM.state.wiring, rail = SIM.PORTS.servo;
+    let s = '<svg class="fcsvg rxsvg" viewBox="0 0 400 500" role="img" aria-label="수신기와 FC 서보 레일 핀 배치">';
+    s += '<rect class="board" x="30" y="20" width="340" height="190" rx="14"/><text class="plabel big" x="200" y="46">R8 수신기 · 핀 헤더</text>';
+    const rx0 = 78, rdx = 30, ry = [92, 116, 140];
+    ["S", "+", "−"].forEach((t, k) => (s += '<text class="plabel" x="52" y="' + (ry[k] + 4) + '">' + t + "</text>"));
+    RX_PINS.forEach((c, i) => {
+      const x = rx0 + i * rdx, on = w.rxEnd === c;
+      s += '<g class="port' + (on ? " used" : "") + '" data-act="rxPin" data-arg="' + c + '" tabindex="0" role="button" aria-label="수신기 ' + (c === "SB" ? "SBUS" : "CH" + c) + ' 핀">';
+      s += '<rect class="sock" x="' + (x - 11) + '" y="80" width="22" height="72" rx="2"/>';
+      for (let k = 0; k < 3; k++) s += '<circle class="pin" cx="' + x + '" cy="' + ry[k] + '" r="3"/>';
+      s += '<text class="plabel" x="' + x + '" y="172">' + (c === "SB" ? "SBUS" : c) + "</text>";
+      if (on) s += plug3(x, ry[0], 24, w.rxRevRx, 18);
+      s += "</g>";
+    });
+    s += '<text class="plabel" x="200" y="198">핀 열을 누르면 커넥터를 꽂습니다</text>';
+    s += '<rect class="board" x="10" y="250" width="380" height="230" rx="14"/><text class="plabel big" x="200" y="276">FC · 서보 레일 (뒤쪽)</text>';
+    const fx0 = 40, fdx = 22, fy = [318, 340, 362];
+    ["S", "+", "−"].forEach((t, k) => (s += '<text class="plabel" x="22" y="' + (fy[k] + 4) + '">' + t + "</text>"));
+    rail.forEach((p, i) => {
+      const x = fx0 + i * fdx, on = w.plug.rx === p, lab = p === "RC IN" ? "RC" : p === "SBUS OUT" ? "SB" : (p.startsWith("MAIN") ? "M" : "A") + p.replace(/\D/g, "");
+      const other = !on && Object.keys(w.plug).some((c) => c !== "rx" && w.plug[c] === p && SIM.cableReady(c));
+      s += '<g class="port' + (on ? " used" : "") + (other ? " far" : "") + '" data-act="rxPort" data-arg="' + p + '" tabindex="0" role="button" aria-label="FC ' + p + ' 포트">';
+      s += '<rect class="sock" x="' + (x - 9) + '" y="306" width="18" height="68" rx="2"/>';
+      for (let k = 0; k < 3; k++) s += '<circle class="pin" cx="' + x + '" cy="' + fy[k] + '" r="2.6"/>';
+      s += '<text class="plabel" x="' + x + '" y="392">' + lab + "</text>";
+      if (on) s += plug3(x, fy[0], 22, w.rxRevFc, 16);
+      s += "</g>";
+    });
+    s += '<text class="plabel" x="62" y="418">RC IN · SBUS OUT</text><text class="plabel" x="172" y="418">MAIN OUT 1–8</text><text class="plabel" x="326" y="418">AUX OUT 1–6</text>';
+    s += '<text class="plabel" x="200" y="456">포트를 누르면 FC 쪽 커넥터를 꽂습니다</text></svg>';
+    const rxAt = w.rxEnd ? (w.rxEnd === "SB" ? "SBUS" : "CH" + w.rxEnd) : "미연결", fcAt = w.plug.rx || "미연결";
+    let tray = '<div class="tray"><h3>3선 커넥터</h3><p class="muted small">흰선 = 신호(S), 빨간선 = +, 검은선 = −</p>';
+    tray += '<div class="rxside"><b>수신기 쪽</b><span class="chip ' + (w.rxEnd ? "ok" : "") + '">' + rxAt + "</span>" + btn("rxFlip", "뒤집어 꽂기", "", "rxRevRx") + (w.rxEnd ? btn("rxUnplug", "뽑기", "ghost", "rx") : "") + "</div>";
+    tray += '<div class="rxside"><b>FC 쪽</b><span class="chip ' + (w.plug.rx ? "ok" : "") + '">' + fcAt + "</span>" + btn("rxFlip", "뒤집어 꽂기", "", "rxRevFc") + (w.plug.rx ? btn("rxUnplug", "뽑기", "ghost", "fc") : "") + "</div>";
+    tray += "</div>";
+    return '<div class="fchead"><h2>수신기 ↔ FC 배선</h2>' + btn("rxClose", "닫기") + '</div><p class="fchint">수신기 쪽 핀과 FC 쪽 포트를 고르고, 커넥터 선 색이 핀 표시(S · + · −)와 맞는지 확인하세요.</p><div class="fcbody">' + s + tray + "</div>";
   }
 
   // ---------- 하판(PDB) 세부 보기: XT60F 8개 + 주전원 + ESC 통신선 하네스 ----------
@@ -464,7 +510,7 @@
     $("#step-next span").textContent = last ? "완료" : STEP_NAME[STEPS[si + 1]]; $("#step-next").classList.toggle("done", last);
     $("#panel").hidden = !ui.open || tab === "hw"; $("#panel-title").textContent = STEP_NAME[tab]; $("#reboot-btn").hidden = tab !== "sw";
     if (SIM.selected) ui.wire = null;
-    const pop = $("#pop"), showPop = (!!SIM.selected || !!ui.wire) && !F.active && SIM.scene.env === "bench" && !ui.fcView && !ui.pdbView;
+    const pop = $("#pop"), showPop = (!!SIM.selected || !!ui.wire) && !F.active && SIM.scene.env === "bench" && !ui.fcView && !ui.pdbView && !ui.rxView;
     pop.hidden = !showPop; if (showPop) pop.innerHTML = ui.wire ? "<h3>배선</h3><p class=\"where\">" + esc(ui.wire.label) + '</p><div class="btns">' + btn("wireCut", "분리") + btn("wireClose", "닫기", "ghost") + "</div>" : popHtml(SIM.selected);
     const doneMark = { accel: SIM.state.cal.accel, compass: SIM.state.cal.compass, radio: SIM.state.cal.radio, esccal: SIM.state.cal.esc, frame: P().FRAME_CLASS === 1 };
     $("#subnav").innerHTML = NAV[tab].map(([k, n], i) => (tab === "sw" && i === 0 ? '<p class="navgroup">필수 설정</p>' : "") + (tab === "sw" && k === "battery" ? '<p class="navgroup">선택 설정</p>' : "") + '<button type="button" data-act="page" data-arg="' + k + '"' + (k === page ? ' aria-current="true"' : "") + ">" + (tab === "sw" ? '<span class="navnum">' + (i + 1) + "</span>" : "") + "<span>" + n + "</span>" + (tab === "sw" && doneMark[k] ? '<span class="navok" aria-label="완료">✓</span>' : "") + "</button>").join("");
@@ -476,6 +522,8 @@
     if (focus && document.getElementById(focus) && focus === "pfilter") { const el = document.getElementById(focus); el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
     if (ui.fcView && F.active) ui.fcView = false;
     if (ui.pdbView && (F.active || !SIM.has("frameBot"))) ui.pdbView = false;
+    if (ui.rxView && F.active) ui.rxView = false;
+    const rv = $("#rxview"); rv.hidden = !ui.rxView; if (ui.rxView) rv.innerHTML = rxViewHtml();
     const pv = $("#pdbview"); pv.hidden = !ui.pdbView; if (ui.pdbView) pv.innerHTML = pdbViewHtml();
     const fv = $("#fcview"); fv.hidden = !ui.fcView; if (ui.fcView) fv.innerHTML = fcViewHtml();
     const tv = $("#txview"); tv.hidden = !ui.txView || F.active; if (!tv.hidden) tv.innerHTML = txHtml();
@@ -532,6 +580,10 @@
     install: (a) => { const e = SIM.install(SIM.selected, a); if (e) SIM.toast(e, "bad"); },
     remove: (a) => SIM.remove(a), rotate: (a) => SIM.rotate(a), flip: (a) => SIM.flipProp(a),
     fcView: () => { ui.fcView = true; ui.fcAuto = false; ui.cable = null; render(); }, fcClose: () => { ui.fcView = false; render(); },
+    rxView: () => { ui.rxView = true; SIM.select(null); render(); }, rxClose: () => { ui.rxView = false; render(); },
+    rxPin: (a) => { const w = SIM.state.wiring; if (w.rxEnd === a) { w.rxEnd = ""; return SIM.emit(); } w.rxEnd = a; SIM.sfx("plug"); SIM.emit(); },
+    rxPort: (a) => { if (SIM.state.wiring.plug.rx === a) return SIM.setPlug("rx", ""); SIM.setPlug("rx", a); SIM.sfx("plug"); },
+    rxUnplug: (a) => { if (a === "rx") { SIM.state.wiring.rxEnd = ""; SIM.emit(); } else SIM.setPlug("rx", ""); },
     pdbView: () => { ui.pdbView = true; ui.pdbAuto = false; ui.pdbSel = null; render(); }, pdbClose: () => { ui.pdbView = false; render(); },
     pdbCable: (a) => { ui.pdbSel = ui.pdbSel === a ? null : a; render(); },
     pdbSlot: (a) => {
@@ -748,6 +800,7 @@
     document.body.addEventListener("pointerup", (e) => { if (!gd || e.pointerId !== gd.id) return; if (gd.side === 1) { SIM.tx.rx = 0; SIM.tx.ry = 0; } else SIM.tx.lx = 0; gd = null; });
     SIM.scene.onWire = (meta, x, y) => { ui.wire = meta; ui.wireAt = [x, y]; if (SIM.selected) SIM.select(null); else render(); };
     SIM.scene.onFcCable = (c, auto) => { ui.fcView = true; ui.fcAuto = !!auto; ui.cable = SIM.cableReady(c) ? c : null; SIM.select(null); render(); };
+    SIM.scene.onRxCable = () => { ui.rxView = true; ui.fcView = false; SIM.select(null); render(); };
     SIM.scene.onPdbCable = (tip) => {
       const pt = SIM.part(tip.part), pos = (SIM.state.install[tip.part] || "").split("@")[1];
       ui.pdbSel = pt.type === "esc" ? (tip.key === "pwr" ? "pwr:" : "tel:") + pos : pt.type === "pm" ? "pmout" : "batt";

@@ -11,7 +11,43 @@
   const timeStr = (d) => pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds());
 
   const S = (SIM.session = load(KEY, { name: "", startAt: 0, running: false }));
-  const persist = () => save(KEY, { name: S.name, startAt: S.startAt, running: S.running });
+  const persist = () => save(KEY, { name: S.name, startAt: S.startAt, running: S.running, exam: S.exam || null });
+
+  // ----- 고장 진단 시험: 관리자가 고른 고장을 링크(?exam=…)에 담아 교육생에게 준다 -----
+  const XK = "drone-maint";
+  const encExam = (o) => { const b = new TextEncoder().encode(JSON.stringify(o)); let t = ""; b.forEach((x, i) => (t += String.fromCharCode(x ^ XK.charCodeAt(i % XK.length)))); return btoa(t).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); };
+  const decExam = (c) => { try { const t = atob(c.replace(/-/g, "+").replace(/_/g, "/")); const b = new Uint8Array(t.length); for (let i = 0; i < t.length; i++) b[i] = t.charCodeAt(i) ^ XK.charCodeAt(i % XK.length); const o = JSON.parse(new TextDecoder().decode(b)); return o && Array.isArray(o.f) && o.f.length ? o : null; } catch (e) { return null; } };
+  const qs = new URLSearchParams(location.search);
+  const EXAM = qs.get("exam") ? decExam(qs.get("exam")) : null;
+  const ADMIN_URL = qs.has("admin") || location.hash === "#admin";
+  let checks = null; // 고장마다 아직 남아 있는지 판정하는 함수
+  const symptomOf = (i) => (EXAM.t && EXAM.t[i]) || SIM.FAULT_INFO[EXAM.f[i]][1];
+  function showSymptoms(first) {
+    const ans = (S.exam && S.exam.answers) || [];
+    let h = '<h2>' + esc(EXAM.n || "고장 진단 시험") + '</h2><p class="muted">아래 증상이 나타나는 기체입니다. 원인을 찾아 고치고, 찾은 원인을 적으세요. 이 창은 위쪽 <b>증상</b> 버튼으로 언제든 다시 열 수 있습니다.</p><ol class="symlist">';
+    EXAM.f.forEach((_, i) => { h += '<li><p class="sym">' + esc(symptomOf(i)) + '</p><label class="muted" for="ans' + i + '">찾은 원인</label><textarea id="ans' + i + '" data-ans="' + i + '" rows="2" placeholder="어느 부품·배선·설정이 어떻게 잘못되어 있었는지 적으세요">' + esc(ans[i] || "") + "</textarea></li>"; });
+    h += '</ol><div class="btns"><button type="button" class="btn primary" data-act="sessionCancel">' + (first ? "점검 시작" : "닫기") + "</button></div>";
+    $("#finish-card").innerHTML = h; $("#finish").hidden = false;
+  }
+  document.body.addEventListener("input", (e) => { const i = e.target.dataset && e.target.dataset.ans; if (i === undefined || !S.exam) return; S.exam.answers[+i] = e.target.value; persist(); });
+  // 관리자 출제 화면: 고장을 고르고 증상 문구를 다듬은 뒤 링크를 만든다
+  function openBuilder() {
+    let h = '<h2>고장 진단 시험 만들기</h2><p class="muted">낼 고장을 고르세요. 교육생에게는 오른쪽 <b>증상</b>만 보이고 원인은 보이지 않습니다. 증상 문구는 고쳐 쓸 수 있습니다.</p>';
+    h += '<label class="muted" for="exam-name">시험 이름</label><input id="exam-name" type="text" maxlength="40" value="고장 진단 시험"><div class="fxlist">';
+    SIM.FAULT_INFO.forEach(([name, sym], i) => { h += '<div class="fxrow"><label><input type="checkbox" data-fx="' + i + '"> ' + esc(name) + '</label><textarea data-fs="' + i + '" rows="2" aria-label="' + esc(name) + ' 증상">' + esc(sym) + '</textarea></div>'; });
+    h += '</div><div class="btns"><button type="button" class="btn primary" data-act="examMake">시험 링크 만들기</button><button type="button" class="btn ghost" data-act="sessionCancel">닫기</button></div><div id="exam-out"></div>';
+    $("#finish-card").innerHTML = h; $("#finish").hidden = false;
+  }
+  function makeExam() {
+    const ids = [...document.querySelectorAll("[data-fx]")].filter((c) => c.checked).map((c) => +c.dataset.fx);
+    if (!ids.length) return SIM.toast("고장을 하나 이상 고르세요.", "bad");
+    const t = ids.map((i) => { const v = document.querySelector('[data-fs="' + i + '"]').value.trim(); return v === SIM.FAULT_INFO[i][1] ? "" : v; });
+    const o = { f: ids, s: 1 + Math.floor(Math.random() * 1e9), n: $("#exam-name").value.trim() || "고장 진단 시험" };
+    if (t.some(Boolean)) o.t = t;
+    const url = location.origin + location.pathname + "?exam=" + encExam(o);
+    $("#exam-out").innerHTML = '<p class="muted">이 링크를 교육생에게 보내세요. 같은 링크는 모두 같은 고장(같은 위치)으로 열립니다.</p><input id="exam-link" type="text" readonly value="' + esc(url) + '"><div class="btns"><button type="button" class="btn primary" data-act="examCopy">링크 복사</button><a class="btn" href="' + esc(url) + '" target="_blank" rel="noopener">새 창에서 열어 보기</a></div>';
+    $("#exam-out").scrollIntoView({ block: "nearest" });
+  }
   const elapsed = () => (S.running ? (Date.now() - S.startAt) / 1000 : S.final || 0);
 
   // ----- 공유 기록 (게시 페이지에서만): 강사가 그날 교육생 전체 기록을 모아 받는다 -----
@@ -106,6 +142,8 @@
   // ----- 시작 화면 -----
   function showIntro(step) {
     $("#intro").hidden = false;
+    if (EXAM) { $(".intro-kicker").textContent = "고장 진단 시험"; $("#intro-exam").hidden = false; $("#intro-exam").textContent = "관리자가 제시한 고장 증상을 보고 원인을 찾아 고치는 시험입니다. " + EXAM.f.length + "문제"; }
+    $("#intro-admin").hidden = !ADMIN_URL;
     const ready = step === "ready";
     $("#intro-form").hidden = ready; $("#intro-ready").hidden = !ready;
     if (ready) $("#intro-hello").textContent = S.name + "님, 준비되면 START를 누르세요. 누르는 순간 시간이 올라갑니다.";
@@ -124,13 +162,16 @@
     $("#intro").hidden = true; $("#finish").hidden = true;
     $("#trainee").textContent = S.name;
     if (SIM.ui && SIM.ui.ACT_go) SIM.ui.ACT_go("hw");
+    S.exam = null; checks = null; $("#symptom-btn").hidden = !EXAM;
+    if (EXAM) { checks = SIM.startExam(EXAM.f, EXAM.s); S.exam = { code: qs.get("exam"), answers: EXAM.f.map(() => "") }; persist(); showSymptoms(true); }
   }
 
   // ----- 종료: 교육생은 기록을 관리자 저장소로 보내고 끝 (결과는 보여주지 않는다) -----
   const PEND = "drone-sim-pending";
   S.finish = function () {
     if (!S.running) return;
-    $("#finish-card").innerHTML = '<h2>실습을 종료할까요?</h2><p class="muted">' + esc(S.name) + " · " + dateStr(new Date()) + '</p><p class="bigtime">' + fmt(elapsed()) + '</p><p class="muted">종료하면 기록이 관리자에게 자동으로 전송됩니다.</p><div class="btns">' +
+    const empty = S.exam ? S.exam.answers.filter((a) => !String(a || "").trim()).length : 0;
+    $("#finish-card").innerHTML = (empty ? '<p class="note warn">원인을 적지 않은 증상이 ' + empty + "개 있습니다. <button type=\"button\" class=\"btn\" data-act=\"symptoms\">증상·답 보기</button></p>" : "") + '<h2>' + (S.exam ? "시험을" : "실습을") + ' 종료할까요?</h2><p class="muted">' + esc(S.name) + " · " + dateStr(new Date()) + '</p><p class="bigtime">' + fmt(elapsed()) + '</p><p class="muted">종료하면 기록이 관리자에게 자동으로 전송됩니다.</p><div class="btns">' +
       '<button type="button" class="btn primary" data-act="sessionConfirm">종료</button><button type="button" class="btn ghost" data-act="sessionCancel">계속 작업하기</button></div>';
     $("#finish").hidden = false;
   };
@@ -141,9 +182,14 @@
   }
   async function confirmFinish() {
     const end = new Date(), sec = Math.round(elapsed()), startD = new Date(S.startAt);
-    const issues = issueList(), errs = issues.filter((i) => i.level === "오류").length, pre = SIM.prearm(0);
-    const rec = { issues, id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7), date: dateStr(end), name: S.name, seconds: sec, time: fmt(sec), start: timeStr(startD), end: timeStr(end), errors: errs, prearm: pre.length ? "불가 (" + pre.length + "건)" : "통과" };
-    S.running = false; S.final = sec; persist();
+    let issues = issueList();
+    if (S.exam && checks) { // 고장마다: 증상, 실제 원인, 교육생이 적은 원인, 해결 여부
+      const ex = checks.map((c, i) => { const fixed = !c.present(); return { area: "고장 진단", level: fixed ? "해결" : "오류", item: "증상 " + (i + 1) + ": " + symptomOf(i), detail: "실제 원인: " + c.desc + " / 교육생 답: " + (String(S.exam.answers[i] || "").trim() || "(작성 안 함)"), effect: fixed ? "고장을 고쳤습니다" : "고장이 그대로 남아 있습니다" }; });
+      issues = ex.concat(issues);
+    }
+    const errs = issues.filter((i) => i.level === "오류").length, pre = SIM.prearm(0);
+    const rec = { issues, mode: S.exam ? "고장 진단" : "조립·정비", id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7), date: dateStr(end), name: S.exam ? S.name + " (고장 진단)" : S.name, seconds: sec, time: fmt(sec), start: timeStr(startD), end: timeStr(end), errors: errs, prearm: pre.length ? "불가 (" + pre.length + "건)" : "통과" };
+    S.running = false; S.final = sec; S.exam = null; $("#symptom-btn").hidden = true; persist();
     const recs = load(REC, []); recs.push(rec); save(REC, recs);
     const sent = await shareRecord(rec);
     if (!sent) { const pend = load(PEND, []); pend.push(rec); save(PEND, pend); }
@@ -168,10 +214,10 @@
   function renderAdmin(dates) {
     const day = adminRows.filter((r) => r.date === adminDate);
     let h = '<h2>기록 관리</h2><div class="btns">' + (dates.length ? '<select id="admin-date" data-adm="date">' + dates.map((d) => '<option value="' + d + '"' + (d === adminDate ? " selected" : "") + ">" + d + " (" + adminRows.filter((r) => r.date === d).length + "명)</option>").join("") + "</select>" : "") +
-      '<button type="button" class="btn primary" data-act="adminExcel"' + (day.length ? "" : " disabled") + '>이 날짜 엑셀 저장</button><button type="button" class="btn ghost" data-act="sessionCancel">닫기</button></div>';
+      '<button type="button" class="btn" data-act="examBuilder">고장 진단 시험 만들기</button><button type="button" class="btn primary" data-act="adminExcel"' + (day.length ? "" : " disabled") + '>이 날짜 엑셀 저장</button><button type="button" class="btn ghost" data-act="sessionCancel">닫기</button></div>';
     if (!day.length) h += '<p class="muted">아직 기록이 없습니다.</p>';
     for (const r of day) {
-      const bad = (r.issues || []).filter((i) => i.level === "오류"), warn = (r.issues || []).filter((i) => i.level !== "오류");
+      const bad = (r.issues || []).filter((i) => i.level === "오류"), warn = (r.issues || []).filter((i) => i.level === "주의");
       h += '<details class="admrec"><summary><b>' + esc(r.name) + "</b><span>" + r.time + "</span><span>" + r.start + "–" + r.end + '</span><span class="chip ' + (bad.length ? "bad" : "ok") + '">오류 ' + bad.length + "</span>" + (warn.length ? '<span class="chip warn">주의 ' + warn.length + "</span>" : "") + "</summary>" +
         ((r.issues || []).length ? '<table class="tbl"><thead><tr><th>구분</th><th>항목</th><th>무엇이 문제인가</th><th>발생하는 문제</th></tr></thead><tbody>' + r.issues.map((i) => "<tr><td>" + esc(i.area) + "</td><td>" + esc(i.item) + "</td><td>" + esc(i.detail) + "</td><td>" + esc(i.effect) + "</td></tr>").join("") + "</tbody></table>" : '<p class="muted">문제 없음</p>') + "</details>";
     }
@@ -196,6 +242,10 @@
     else if (a === "sessionRetry") { b.disabled = true; const left = await sendPending(); SIM.toast(left ? "아직 보내지 못했습니다." : "기록을 보냈습니다.", left ? "bad" : "ok"); if (!left) b.remove(); else b.disabled = false; }
     else if (a === "sessionNew") { $("#finish").hidden = true; S.name = ""; S.running = false; S.final = 0; persist(); showIntro("name"); }
     else if (a === "adminOpen") openAdmin();
+    else if (a === "examBuilder") openBuilder();
+    else if (a === "examMake") makeExam();
+    else if (a === "examCopy") { const i = $("#exam-link"); i.select(); try { await navigator.clipboard.writeText(i.value); SIM.toast("링크를 복사했습니다.", "ok"); } catch (e2) { document.execCommand && document.execCommand("copy"); SIM.toast("링크를 복사했습니다.", "ok"); } }
+    else if (a === "symptoms") { if (EXAM && S.exam) showSymptoms(false); }
     else if (a === "adminExcel") { const day = adminRows.filter((r) => r.date === adminDate); const how = await offerFile(workbook(adminDate, day)); if (how === "failed") SIM.toast("이 화면에서는 파일을 저장할 수 없습니다.", "bad"); }
   });
 
@@ -203,6 +253,9 @@
   setInterval(() => { const t = $("#timer"); if (t) t.textContent = fmt(elapsed()); }, 250);
   $("#trainee").textContent = S.name || "";
   setupAdmin(); sendPending();
+  $("#intro-admin").hidden = !ADMIN_URL; $("#exam-btn").hidden = !ADMIN_URL;
+  if (S.running && S.exam && EXAM && S.exam.code === qs.get("exam")) { checks = SIM.examChecks(EXAM.f, EXAM.s); $("#symptom-btn").hidden = false; }
+  else if (S.running && S.exam) { S.running = false; S.exam = null; persist(); } // 다른 시험 링크로 열면 처음부터
   if (S.running && S.name) $("#intro").hidden = true; // 새로고침해도 진행 중이던 시간은 이어진다
   else if (S.name) showIntro("ready");
   else showIntro("name");
