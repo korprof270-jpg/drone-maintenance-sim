@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>드론 조립과 정비 시뮬레이터</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="sim.css" />
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <h1>드론 조립과 정비 시뮬레이터</h1>
+    <nav class="stepbar" aria-label="단계 이동">
+      <button type="button" id="step-prev" class="stepnav" data-act="stepPrev">‹ <span></span></button>
+      <button type="button" id="step-title" class="steptitle" data-act="menu" aria-expanded="false"><b></b><small></small></button>
+      <button type="button" id="step-next" class="stepnav next" data-act="stepNext"><span></span> ›</button>
+    </nav>
+    <div class="status" aria-live="polite">
+      <button type="button" id="admin-btn" class="btn" data-act="adminOpen" hidden>기록 관리</button>
+      <span id="trainee" class="trainee"></span>
+      <span id="timer" class="timer" aria-label="경과 시간">00:00</span>
+    </div>
+  </header>
+  <main class="work">
+    <section class="stage" aria-label="3D 작업대">
+      <canvas id="gl"></canvas>
+      <canvas id="hud" hidden></canvas>
+      <div id="hovertip" class="hovertip" hidden></div>
+      <div id="toast" class="toast" role="status"></div>
+      <div id="pop" class="pop" hidden></div>
+      <div id="txview" class="txview" hidden></div>
+      <div id="fcview" class="fcview" hidden></div>
+      <div id="tx" class="tx" hidden>
+        <div class="stickwrap"><div id="stickL" class="stick" aria-label="왼쪽 스틱: 스로틀·요"><i></i></div><span>스로틀 · 요</span></div>
+        <div class="txmid">
+          <div id="tx-sw" class="sw" role="group" aria-label="비행 모드 스위치">
+            <button type="button" data-act="txSw" data-arg="0">모드 1</button>
+            <button type="button" data-act="txSw" data-arg="1">모드 4</button>
+            <button type="button" data-act="txSw" data-arg="2">모드 6</button>
+          </div>
+          <button type="button" id="tx-power" class="btn on" data-act="txPower">송신기 켜짐</button>
+        </div>
+        <div class="stickwrap"><div id="stickR" class="stick" aria-label="오른쪽 스틱: 피치·롤"><i></i></div><span>피치 · 롤</span></div>
+      </div>
+      <aside id="panel" class="panel" aria-label="메뉴" hidden>
+        <div class="panel-head" id="panel-head"><b id="panel-title"></b><span class="panel-actions"><button type="button" class="btn" id="reboot-btn" data-act="reboot" hidden>FC 재부팅</button><button type="button" class="btn ghost" data-act="closePanel" aria-label="메뉴 닫기">닫기</button></span></div>
+        <nav id="subnav" class="subnav" aria-label="세부 메뉴"></nav>
+        <div id="page" class="page"></div>
+      </aside>
+    </section>
+  </main>
+</div>
+<div id="intro" class="intro">
+  <div class="intro-card">
+    <p class="intro-kicker">교육용 3D 정비 실습</p>
+    <h2 class="intro-title">드론 조립과 정비 시뮬레이터</h2>
+    <form id="intro-form" class="intro-form" autocomplete="off">
+      <label for="trainee-name">이름</label>
+      <div class="intro-row"><input id="trainee-name" type="text" maxlength="30" placeholder="이름을 입력하세요" required><button type="submit" class="btn primary">확인</button></div>
+    </form>
+    <div id="intro-ready" class="intro-ready" hidden>
+      <p id="intro-hello"></p>
+      <button type="button" id="intro-start" class="startbtn" data-act="sessionStart">START</button>
+      <button type="button" class="btn ghost" data-act="sessionRename">이름 다시 입력</button>
+    </div>
+  </div>
+</div>
+<div id="finish" class="modal" hidden><div class="modal-card" id="finish-card"></div></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="js/config.js"></script>
+<script src="js/core.js"></script>
+<script src="js/scene.js"></script>
+<script src="js/flight.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/session.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>

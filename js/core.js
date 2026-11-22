@@ -1,0 +1,655 @@
+// 드론 정비 시뮬레이터 — 상태·부품·파라미터·검사 로직
+(function () {
+  const SIM = (window.SIM = {});
+
+  // 기체 좌표: x=오른쪽, z=뒤쪽(앞은 -z), y=위
+  SIM.POS = {
+    FR: { id: "FR", name: "앞-오른쪽", x: 1, z: -1 },
+    RR: { id: "RR", name: "뒤-오른쪽", x: 1, z: 1 },
+    RL: { id: "RL", name: "뒤-왼쪽", x: -1, z: 1 },
+    FL: { id: "FL", name: "앞-왼쪽", x: -1, z: -1 },
+  };
+  SIM.POS_IDS = ["FR", "RR", "RL", "FL"];
+
+  // ArduCopter 프레임 배치 (모터 번호 → 위치·회전방향). order = 모터 테스트 A,B,C,D 순서
+  const X = {
+    1: { x: 1, z: -1, spin: "ccw" }, 2: { x: -1, z: 1, spin: "ccw" },
+    3: { x: -1, z: -1, spin: "cw" }, 4: { x: 1, z: 1, spin: "cw" },
+  };
+  const inv = (m) => Object.fromEntries(Object.entries(m).map(([k, v]) => [k, { ...v, spin: v.spin === "cw" ? "ccw" : "cw" }]));
+  SIM.FRAMES = {
+    1: { name: "X", motors: X, order: [1, 4, 2, 3] },
+    3: { name: "H", motors: inv(X), order: [1, 4, 2, 3] },
+    0: {
+      name: "Plus", order: [3, 1, 4, 2],
+      motors: {
+        1: { x: 1, z: 0, spin: "ccw" }, 2: { x: -1, z: 0, spin: "ccw" },
+        3: { x: 0, z: -1, spin: "cw" }, 4: { x: 0, z: 1, spin: "cw" },
+      },
+    },
+  };
+  SIM.frame = () => SIM.FRAMES[SIM.state.params.FRAME_TYPE] || SIM.FRAMES[1];
+
+  // 실제 기체(X형 암)에서 위치별로 필요한 모터 번호·회전방향
+  SIM.expected = () => {
+    const f = SIM.FRAMES[SIM.state.params.FRAME_TYPE === 3 ? 3 : 1];
+    const out = {};
+    for (const id of SIM.POS_IDS) {
+      const p = SIM.POS[id];
+      for (const n in f.motors) if (f.motors[n].x === p.x && f.motors[n].z === p.z) out[id] = { num: +n, spin: f.motors[n].spin };
+    }
+    return out;
+  };
+
+  // ---------- 부품 (화면에는 규격을 드러내지 않는다) ----------
+  const parts = [];
+  // thread: 모터 축 나사 방향 종류 (cw형은 시계 방향으로 돌 때 너트가 조여진다)
+  ["cw", "ccw", "ccw", "cw"].forEach((t, i) => parts.push({ id: "motor" + (i + 1), type: "motor", thread: t, name: "모터 " + "ABCD"[i] }));
+  for (let i = 1; i <= 4; i++) parts.push({ id: "esc" + i, type: "esc", name: "ESC " + "ABCD"[i - 1] });
+  ["ccw", "cw", "cw", "ccw"].forEach((d, i) => parts.push({ id: "prop" + (i + 1), type: "prop", dir: d, name: "프로펠러 " + "ABCD"[i] }));
+  parts.push({ id: "fc", type: "fc", name: "비행 컨트롤러" });
+  parts.push({ id: "pm", type: "pm", name: "PMU" });
+  parts.push({ id: "battery", type: "battery", name: "배터리" });
+  parts.push({ id: "gps", type: "gps", name: "GPS · 나침반 모듈" });
+  parts.push({ id: "rx", type: "rx", name: "수신기" });
+  parts.push({ id: "telem", type: "telem", name: "텔레메트리" });
+  parts.push({ id: "buzzer", type: "buzzer", name: "부저" });
+  parts.push({ id: "switch", type: "switch", name: "안전 스위치" });
+  // 프레임: 하판(PDB 일체형), 상판, 붐대 4개(앞 2개 빨강), 스키드
+  parts.push({ id: "frameBot", type: "bottom", name: "하판 (PDB)" });
+  parts.push({ id: "frameTop", type: "top", name: "상판" });
+  ["red", "red", "white", "white"].forEach((c, i) => parts.push({ id: "arm" + (i + 1), type: "arm", color: c, name: "붐대 " + "ABCD"[i] }));
+  parts.push({ id: "skid", type: "skid", name: "스키드" });
+  parts.push({ id: "canopy", type: "canopy", name: "케이스 (덮개)" });
+  SIM.PARTS = parts;
+  SIM.part = (id) => parts.find((p) => p.id === id);
+
+  // 기체 위 장착 자리. 부품 모양만 맞으면 어느 자리에든 붙일 수 있다 (맞는 자리인지는 직접 판단).
+  SIM.SLOTS = { "frame:base": "조립 거치대", "frame:top": "하판 위 (상판 자리)", "frame:skid": "하판 아래 (스키드 자리)", "frame:canopy": "상판 위 (케이스 자리)", "deck:C": "상판 중앙", "deck:L": "상판 왼쪽", "deck:R": "상판 오른쪽", "deck:RL": "상판 왼쪽 뒤", "deck:RR": "상판 오른쪽 뒤", mast: "상판 뒤 마스트", "bot:C": "하판 중앙", "bot:L": "하판 왼쪽", "bot:R": "하판 오른쪽", under: "하판 아래" };
+  const DECK = ["deck:C", "deck:L", "deck:R", "deck:RL", "deck:RR"];
+  const BOT = ["bot:C", "bot:L", "bot:R"];
+  SIM.ACCEPT = { fc: [...DECK, ...BOT], gps: ["mast", ...DECK], pm: [...BOT, ...DECK], battery: ["under"], bottom: ["frame:base"], top: ["frame:top"], skid: ["frame:skid"], canopy: ["frame:canopy"], rx: [...DECK, ...BOT], telem: [...DECK, ...BOT], buzzer: [...DECK, ...BOT], switch: [...DECK, ...BOT] };
+  SIM.slotName = (s) => {
+    const [t, pos] = s.split("@");
+    if (pos) return SIM.POS[pos].name + (t === "prop" ? " 모터 축" : t === "motor" ? " 모터 마운트" : t === "arm" ? " 붐대 자리" : " 붐대 위");
+    return SIM.SLOTS[s] || s;
+  };
+  SIM.slotsFor = (part) => (["motor", "esc", "prop", "arm"].includes(part.type) ? SIM.POS_IDS.map((p) => part.type + "@" + p) : SIM.ACCEPT[part.type]);
+
+  // ---------- 커넥터와 포트: 모양이 같은 것끼리만 꽂힌다 ----------
+  const servoPorts = ["RC IN", "SBUS OUT"];
+  for (let i = 1; i <= 8; i++) servoPorts.push("MAIN OUT " + i);
+  for (let i = 1; i <= 6; i++) servoPorts.push("AUX OUT " + i);
+  // Pixhawk 기준 포트. 커넥터 종류: DF13 2·3·4·6·7핀, 마이크로 USB, 뒤쪽 서보 레일(3핀 헤더)
+  SIM.PORTS = {
+    df6: ["TELEM1", "TELEM2", "POWER", "SERIAL 4/5", "GPS"],
+    df4: ["CAN", "I2C"],
+    df3: ["SPKT/DSM", "ADC 3.3V", "SWITCH", "ADC 6.6V"],
+    df2: ["BUZZER"],
+    df7: ["SPI"],
+    usb: ["USB"],
+    servo: servoPorts,
+  };
+  SIM.CONN_NAMES = { df6: "DF13 6핀", df4: "DF13 4핀", df3: "DF13 3핀", df2: "DF13 2핀", df7: "DF13 7핀", usb: "마이크로 USB", servo: "3핀 서보" };
+  SIM.CONN_PINS = { df6: 6, df4: 4, df3: 3, df2: 2, df7: 7, usb: 5, servo: 3 };
+  SIM.portType = (port) => Object.keys(SIM.PORTS).find((t) => SIM.PORTS[t].includes(port));
+  SIM.CABLES = {
+    pm: { name: "PMU 케이블", conn: "df6", need: ["pm"] },
+    gps: { name: "GPS 모듈 케이블 (굵은 쪽)", conn: "df6", need: ["gps"] },
+    compass: { name: "GPS 모듈 케이블 (가는 쪽)", conn: "df4", need: ["gps"] },
+    telem: { name: "텔레메트리 케이블", conn: "df6", need: ["telem"] },
+    buzzer: { name: "부저 케이블", conn: "df2", need: ["buzzer"] },
+    switch: { name: "안전 스위치 케이블", conn: "df3", need: ["switch"] },
+    rx: { name: "수신기 신호선", conn: "servo", need: ["rx"] },
+  };
+  for (const id of SIM.POS_IDS) SIM.CABLES["esc" + id] = { name: SIM.POS[id].name + " ESC 신호선", conn: "servo", need: ["esc@" + id] };
+  SIM.CABLES.escTelem = { name: "ESC 통신선 하네스", conn: "df6", need: ["esc@FR", "esc@RR", "esc@RL", "esc@FL"], any: true };
+  SIM.PHASE_PADS = ["A", "B", "C"];  // PDB XT60F 8개: 붐대마다 양옆에 2개 (FR 1·2, RR 3·4, RL 5·6, FL 7·8). ESC 전원선은 짧아서 자기 붐대 옆 커넥터에만 닿는다
+  SIM.XT_OF = { FR: ["xt1", "xt2"], RR: ["xt3", "xt4"], RL: ["xt5", "xt6"], FL: ["xt7", "xt8"] };
+  SIM.xtName = (x) => "XT60 " + x.slice(2);
+  SIM.escPowered = (pos) => /^xt/.test(SIM.state.wiring.escPwr[pos] || "");
+  SIM.setEscXt = (pos, xt) => { const w = SIM.state.wiring; if (xt) for (const p in w.escPwr) if (w.escPwr[p] === xt) w.escPwr[p] = ""; w.escPwr[pos] = xt; SIM.emit(); };
+
+  // FC 6핀 포트 ↔ 시리얼 번호
+  SIM.SERIAL_OF = { TELEM1: 1, TELEM2: 2, GPS: 3, "SERIAL 4/5": 4 };
+  SIM.serialProto = (port) => { const n = SIM.SERIAL_OF[port]; return n ? SIM.state.params["SERIAL" + n + "_PROTOCOL"] : null; };
+  SIM.MODES = { 0: "Stabilize", 2: "AltHold", 5: "Loiter", 6: "RTL", 9: "Land" };
+
+  // 송신기 실제 출력 (교정으로 찾아야 하는 값)
+  SIM.TX = { c: { 1: 1506, 2: 1498, 4: 1502 }, amp: { 1: 478, 2: 470, 4: 482 }, thrMin: 1024, thrMax: 1976, sw: [1165, 1500, 1815] };
+
+  // ---------- 파라미터 ----------
+  const ORI = { 0: "None (0°)", 1: "Yaw45", 2: "Yaw90", 3: "Yaw135", 4: "Yaw180", 5: "Yaw225", 6: "Yaw270", 7: "Yaw315" };
+  const SER_P = { "-1": "None", 1: "MAVLink1", 2: "MAVLink2", 5: "GPS", 16: "ESC Telemetry" };
+  const D = (SIM.PARAM_DEFS = {
+    FRAME_CLASS: { d: 0, desc: "프레임 클래스", opts: { 0: "미설정", 1: "Quad", 2: "Hexa", 3: "Octa", 5: "Y6" } },
+    FRAME_TYPE: { d: 1, desc: "프레임 타입", opts: { 0: "Plus (+)", 1: "X", 3: "H" } },
+    AHRS_ORIENTATION: { d: 0, desc: "FC 보드 장착 방향", opts: ORI },
+    COMPASS_ORIENT: { d: 0, desc: "외장 나침반 장착 방향", opts: ORI },
+    ARMING_CHECK: { d: 1, desc: "시동 전 점검 (1=전체, 0=끔)", opts: { 1: "전체 점검", 0: "점검 안 함" } },
+    BRD_SAFETYENABLE: { d: 1, desc: "안전 스위치 사용", opts: { 1: "사용", 0: "사용 안 함" } },
+    SERIAL1_PROTOCOL: { d: 2, desc: "TELEM1 (SERIAL1) 프로토콜", opts: SER_P },
+    SERIAL2_PROTOCOL: { d: 2, desc: "TELEM2 (SERIAL2) 프로토콜", opts: SER_P },
+    SERIAL3_PROTOCOL: { d: 5, desc: "GPS (SERIAL3) 프로토콜", opts: SER_P },
+    SERIAL4_PROTOCOL: { d: 5, desc: "SERIAL 4/5 (SERIAL4) 프로토콜", opts: SER_P },
+  });
+  for (let i = 1; i <= 4; i++) {
+    D["RC" + i + "_MIN"] = { d: 1100, desc: "RC" + i + " 최소 PWM", min: 800, max: 2200 };
+    D["RC" + i + "_TRIM"] = { d: 1500, desc: "RC" + i + " 중립 PWM", min: 800, max: 2200 };
+    D["RC" + i + "_MAX"] = { d: 1900, desc: "RC" + i + " 최대 PWM", min: 800, max: 2200 };
+    D["RC" + i + "_REVERSED"] = { d: 0, desc: "RC" + i + " 반전", opts: { 0: "정상", 1: "반전" } };
+  }
+  Object.assign(D, {
+    RCMAP_ROLL: { d: 1, desc: "롤 입력 채널", min: 1, max: 4 },
+    RCMAP_PITCH: { d: 2, desc: "피치 입력 채널", min: 1, max: 4 },
+    RCMAP_THROTTLE: { d: 3, desc: "스로틀 입력 채널", min: 1, max: 4 },
+    RCMAP_YAW: { d: 4, desc: "요 입력 채널", min: 1, max: 4 },
+    FLTMODE_CH: { d: 5, desc: "비행 모드 채널", min: 5, max: 8 },
+  });
+  for (let i = 1; i <= 6; i++) D["FLTMODE" + i] = { d: 0, desc: "비행 모드 " + i, opts: SIM.MODES };
+  Object.assign(D, {
+    FS_THR_ENABLE: { d: 1, desc: "스로틀(라디오) 페일세이프", opts: { 0: "사용 안 함", 1: "항상 RTL", 3: "항상 Land" } },
+    FS_THR_VALUE: { d: 975, desc: "페일세이프 판정 PWM", min: 900, max: 1100 },
+    BATT_MONITOR: { d: 0, desc: "배터리 모니터", opts: { 0: "사용 안 함", 3: "전압만", 4: "전압 + 전류" } },
+    BATT_CAPACITY: { d: 16000, desc: "배터리 용량 (mAh)", min: 100, max: 30000 },
+    BATT_LOW_VOLT: { d: 0, desc: "저전압 기준 (V, 0=끔)", min: 0, max: 30, step: 0.1 },
+    BATT_FS_LOW_ACT: { d: 0, desc: "저전압 시 동작", opts: { 0: "없음", 1: "Land", 2: "RTL" } },
+  });
+  for (let i = 1; i <= 8; i++) D["SERVO" + i + "_FUNCTION"] = { d: i <= 4 ? 32 + i : 0, desc: "MAIN OUT " + i + " 출력 기능", opts: { 0: "Disabled", 33: "Motor1", 34: "Motor2", 35: "Motor3", 36: "Motor4" } };
+  Object.assign(D, {
+    SERVO_BLH_RVMASK: { d: 0, desc: "모터 방향 반전 (출력 비트마스크)", min: 0, max: 255 },
+    MOT_SPIN_ARM: { d: 0.1, desc: "시동 시 모터 회전량", min: 0, max: 0.3, step: 0.01 },
+    MOT_SPIN_MIN: { d: 0.15, desc: "비행 중 최소 회전량", min: 0, max: 0.3, step: 0.01 },
+    ANGLE_MAX: { d: 3000, desc: "최대 기울기 (centi-deg)", min: 1000, max: 8000, step: 100 },
+    PILOT_SPEED_UP: { d: 250, desc: "최대 상승 속도 (cm/s)", min: 50, max: 500, step: 10 },
+    RTL_ALT: { d: 1500, desc: "RTL 복귀 고도 (cm)", min: 200, max: 8000, step: 100 },
+    ATC_ANG_RLL_P: { d: 4.5, desc: "롤 각도 P", min: 1, max: 12, step: 0.1 },
+    ATC_ANG_PIT_P: { d: 4.5, desc: "피치 각도 P", min: 1, max: 12, step: 0.1 },
+    ATC_RAT_RLL_P: { d: 0.135, desc: "롤 각속도 P", min: 0.01, max: 0.6, step: 0.005 },
+    ATC_RAT_RLL_I: { d: 0.135, desc: "롤 각속도 I", min: 0, max: 2, step: 0.005 },
+    ATC_RAT_RLL_D: { d: 0.0036, desc: "롤 각속도 D", min: 0, max: 0.05, step: 0.0002 },
+    ATC_RAT_PIT_P: { d: 0.135, desc: "피치 각속도 P", min: 0.01, max: 0.6, step: 0.005 },
+    ATC_RAT_PIT_I: { d: 0.135, desc: "피치 각속도 I", min: 0, max: 2, step: 0.005 },
+    ATC_RAT_PIT_D: { d: 0.0036, desc: "피치 각속도 D", min: 0, max: 0.05, step: 0.0002 },
+    ATC_RAT_YAW_P: { d: 0.4, desc: "요 각속도 P", min: 0.01, max: 1, step: 0.01 },
+    ATC_RAT_YAW_I: { d: 0.018, desc: "요 각속도 I", min: 0, max: 1, step: 0.002 },
+    COMPASS_OFS_X: { d: 0, desc: "나침반 오프셋 X", min: -2000, max: 2000 },
+    COMPASS_OFS_Y: { d: 0, desc: "나침반 오프셋 Y", min: -2000, max: 2000 },
+    COMPASS_OFS_Z: { d: 0, desc: "나침반 오프셋 Z", min: -2000, max: 2000 },
+  });
+
+  function defaults() {
+    const params = {};
+    for (const k in D) params[k] = D[k].d;
+    const install = {};
+    for (const p of parts) install[p.id] = null;
+    return {
+      install,
+      rot: { fc: 0, gps: 0 }, // 오른쪽으로 90°씩 돌린 횟수
+      flip: { prop1: false, prop2: false, prop3: false, prop4: false }, // 프로펠러를 뒤집어 끼웠는지
+      bench: {}, // 작업대 위에 내려놓은 위치 [x, z]
+      screws: {}, // 나사 구멍 "부품id:번호" → 체결한 나사 크기 "2.0" | "2.5" | "3.0"
+      wiring: {
+        plug: Object.fromEntries(Object.keys(SIM.CABLES).map((k) => [k, ""])), // 케이블 → FC 포트
+        escPwr: { FR: "", RR: "", RL: "", FL: "" }, // ESC 전원선(XT60M) → PDB XT60F 번호: "", "xt1"…"xt8"
+        motorWires: Object.fromEntries(SIM.POS_IDS.map((p) => [p, { 1: "", 2: "", 3: "" }])), // 모터선 ①②③ → ESC 3상 단자 A/B/C
+        escTelem: { FR: "", RR: "", RL: "", FL: "" }, // ESC 통신선 → "harness" 
+        batt: "", // 배터리 커넥터: "", "pm", "pdb"
+        rxEnd: "", rxRevRx: false, rxRevFc: false, // 수신기 3선 커넥터: 수신기 쪽 핀("1"…"8", "SB")과 양쪽 방향
+        pmOut: "", // PMU 출력 XT60M → PDB 주전원 XT60F: "", "ok"
+      },
+      params,
+      cal: { accel: false, compass: false, radio: false, esc: false },
+      rxBound: false, txCal: false, needReboot: false, bindHeld: false,
+      txm: { name: "MODEL01", mode: 2, rf: "OFF", proto: "FrSky X", failsafe: "Not set", mix: { 1: "Thr", 2: "Ail", 3: "Ele", 4: "Rud", 5: "", 6: "", 7: "", 8: "" }, inv: {} },
+    };
+  }
+
+  const KEY = "drone-maint-sim-v8";
+  function load() {
+    const s = defaults();
+    try {
+      const raw = JSON.parse(localStorage.getItem(KEY) || "null");
+      if (raw && raw.install) {
+        Object.assign(s.install, raw.install);
+        Object.assign(s.rot, raw.rot); Object.assign(s.flip, raw.flip); Object.assign(s.bench, raw.bench || {}); Object.assign(s.screws, raw.screws || {});
+        for (const k in s.wiring) if (raw.wiring && raw.wiring[k] !== undefined) s.wiring[k] = typeof s.wiring[k] === "object" ? Object.assign(s.wiring[k], raw.wiring[k]) : raw.wiring[k];
+        Object.assign(s.params, raw.params);
+        Object.assign(s.cal, raw.cal); s.rxBound = !!raw.rxBound; s.txCal = !!raw.txCal; s.needReboot = !!raw.needReboot; if (raw.txm) { Object.assign(s.txm, raw.txm); s.txm.mix = Object.assign({}, s.txm.mix, raw.txm.mix || {}); s.txm.inv = Object.assign({}, raw.txm.inv || {}); }
+      }
+    } catch (e) {}
+    return s;
+  }
+  SIM.state = load();
+  SIM.selected = null;
+  SIM.motorU = { FR: 0, RR: 0, RL: 0, FL: 0 };
+  SIM.msgs = [];
+
+  const listeners = [];
+  SIM.on = (fn) => listeners.push(fn);
+  SIM.emit = () => {
+    try { localStorage.setItem(KEY, JSON.stringify(SIM.state)); } catch (e) {}
+    listeners.forEach((f) => f());
+  };
+  SIM.log = (text, kind) => {
+    SIM.msgs.unshift({ text, kind: kind || "info", t: Date.now() });
+    if (SIM.msgs.length > 40) SIM.msgs.pop();
+    if (SIM.onLog) SIM.onLog(text, kind);
+  };
+
+  // ---------- 조립 ----------
+  SIM.partAt = (slot) => { for (const id in SIM.state.install) if (SIM.state.install[id] === slot) return SIM.part(id); return null; };
+  // "esc@FR"·"deck:C" 같은 자리 이름이면 그 자리에 부품이 있는지, "fc" 같은 부품 이름이면 그 부품이 기체에 달렸는지
+  SIM.has = (x) => (x.includes("@") || SIM.SLOTS[x] ? !!SIM.partAt(x) : !!SIM.state.install[x]);
+  SIM.placeOnBench = (id, x, z) => { SIM.state.bench[id] = [x, z]; SIM.emit(); };
+  SIM.canInstall = (part, slot) => {
+    if (!SIM.slotsFor(part).includes(slot)) return "이 부품은 그 자리에 맞지 않습니다.";
+    if (SIM.partAt(slot)) return "이미 다른 부품이 장착된 자리입니다.";
+    if (slot.startsWith("deck:") && SIM.has("canopy")) return "케이스를 먼저 벗기세요.";
+    const need = SIM.slotNeeds(slot);
+    if (need && !SIM.partAt(need)) return "먼저 " + SIM.slotName(need) + "에 부품을 장착하세요.";
+    return "";
+  };
+  // 자리가 붙는 바탕 자리 (그 바탕이 있어야 장착 가능)
+  SIM.slotNeeds = (slot) => {
+    const [t, pos] = slot.split("@");
+    if (pos) return t === "arm" ? "frame:base" : t === "prop" ? "motor@" + pos : "arm@" + pos;
+    if (slot.startsWith("deck:") || slot === "mast" || slot === "frame:canopy") return "frame:top";
+    if (slot === "frame:base") return null;
+    return "frame:base";
+  };
+  // 이 자리에 기대어 붙은 부품들 (먼저 떼야 분리 가능)
+  SIM.dependents = (slot) => SIM.PARTS.filter((p) => { const s = SIM.state.install[p.id]; return s && SIM.slotNeeds(s) === slot; });
+  // ---------- 나사: 부품마다 구멍 수와 맞는 크기 ----------
+  SIM.SCREW_SIZES = ["2.0", "2.5", "3.0"];
+  SIM.SCREW_REQ = { motor: "2.0", bottom: "2.0", top: "2.0", arm: "2.5", skid: "2.5", prop: "3.0" };
+  SIM.SCREW_HOLES = {}; // 나사·렌치 기능은 제거됨 (구멍 없음 → 항상 체결된 것으로 본다)
+  SIM.screwCount = (id) => { let n = 0; for (const k in SIM.state.screws) if (k.split(":")[0] === id && SIM.state.screws[k]) n++; return n; };
+  // 구멍보다 큰 나사는 들어가지 않고, 작은 나사는 들어가지만 헐겁다
+  SIM.putScrew = (hole, size) => {
+    const id = hole.split(":")[0], p = SIM.part(id), req = SIM.SCREW_REQ[p.type];
+    if (!SIM.state.install[id]) return "부품을 먼저 장착하세요.";
+    if (+size > +req) return "M" + size + " 나사가 구멍보다 커서 들어가지 않습니다.";
+    SIM.state.screws[hole] = size; SIM.emit(); return ""; // 끼우기만 한 상태 (렌치로 조여야 체결)
+  };
+  const sizeOf = (v) => (v || "").slice(0, 3), tight = (v) => /t$/.test(v || "");
+  SIM.screwSize = sizeOf; SIM.screwTight = tight;
+  // 육각렌치: 나사 크기와 같은 렌치만 맞는다. 조인 나사는 다시 누르면 풀린다
+  SIM.turnScrew = (hole, key) => {
+    const v = SIM.state.screws[hole]; if (!v) return "나사가 없습니다.";
+    if (key !== sizeOf(v)) return key + " 육각렌치가 M" + sizeOf(v) + " 나사에 맞지 않습니다.";
+    SIM.state.screws[hole] = tight(v) ? sizeOf(v) : sizeOf(v) + "t"; SIM.emit(); return tight(v) ? "loosened" : "tightened";
+  };
+  SIM.takeScrew = (hole) => { if (tight(SIM.state.screws[hole])) return "조여진 나사입니다. 맞는 육각렌치로 먼저 푸세요."; delete SIM.state.screws[hole]; SIM.emit(); return ""; };
+
+  // "ok" 모두 맞게 체결, "none" 하나도 없음, "partial" 일부만, "loose" 작은 나사가 섞여 헐거움
+  SIM.screwState = (id) => {
+    const p = SIM.part(id), n = SIM.SCREW_HOLES[p.type]; if (!n) return "ok";
+    let got = 0, small = 0, untight = 0; for (let i = 0; i < n; i++) { const v = SIM.state.screws[id + ":" + i]; if (v) { got++; if (sizeOf(v) !== SIM.SCREW_REQ[p.type]) small++; else if (!tight(v)) untight++; } }
+    return small ? "loose" : got < n ? (got ? "partial" : "none") : untight ? "untight" : "ok";
+  };
+  SIM.fastened = (id) => SIM.screwState(id) === "ok";
+  SIM.platesLoose = () => ["frameBot", "frameTop"].some((id) => SIM.has(id) && !SIM.fastened(id));
+  SIM.frameComplete = () => ["frameBot", "frameTop", "skid"].every((id) => SIM.has(id)) && SIM.POS_IDS.every((p) => SIM.has("arm@" + p));
+  SIM.install = (id, slot) => {
+    const part = SIM.part(id), err = SIM.canInstall(part, slot);
+    if (err) return err;
+    SIM.state.install[id] = slot;
+    SIM.emit();
+    return "";
+  };
+  SIM.remove = (id) => {
+    const st = SIM.state, w = st.wiring, slot = st.install[id];
+    if (!slot) return "";
+    const ns = SIM.screwCount(id);
+    if (ns) return "먼저 나사 " + ns + "개를 푸세요.";
+    if (slot.startsWith("deck:") && SIM.has("canopy")) return "케이스를 먼저 벗기세요.";
+    const dep = SIM.dependents(slot);
+    if (dep.length) return "먼저 " + dep.map((p) => p.name).join(", ") + "을(를) 분리하세요.";
+    const part = SIM.part(id), pos = slot.split("@")[1];
+    st.install[id] = null;
+    if (part.type === "motor") w.motorWires[pos] = { 1: "", 2: "", 3: "" };
+    if (part.type === "esc") { w.plug["esc" + pos] = ""; w.escPwr[pos] = ""; w.motorWires[pos] = { 1: "", 2: "", 3: "" }; w.escTelem[pos] = ""; if (!SIM.cableReady("escTelem")) w.plug.escTelem = ""; }
+    // FC 포트 케이블(PMU·GPS·수신기·텔레메트리·부저·안전 스위치)은 부품을 옮겨도 꽂힌 채로 둔다
+    if (id === "fc") for (const k in w.plug) if (/^esc/.test(k)) w.plug[k] = ""; // ESC 쪽 선은 붐대에 고정되어 있어 FC를 떼면 빠진다
+    if (id === "pm") { w.pmOut = ""; if (w.batt === "pm") w.batt = ""; }
+    if (id === "battery") w.batt = "";
+    SIM.emit();
+  };
+  SIM.select = (id) => { SIM.selected = id; SIM.emit(); };
+  SIM.rotate = (id) => { SIM.state.rot[id] = (SIM.state.rot[id] + 1) % 4; SIM.emit(); };
+
+  SIM.flipProp = (id) => { SIM.state.flip[id] = !SIM.state.flip[id]; SIM.emit(); };
+  // FC 포트 케이블은 FC·부품이 작업대에 있어도 미리 꽂을 수 있다 (ESC 신호선·통신선 하네스만 장착된 ESC가 있어야 함)
+  SIM.cableReady = (c) => { const cb = SIM.CABLES[c]; if (c === "escTelem") return SIM.has("frameBot") && cb.need.some((n) => SIM.has(n)); return cb.need.every((n) => (n.includes("@") ? SIM.has(n) : true)); };
+  SIM.setPlug = (cable, port) => {
+    const w = SIM.state.wiring;
+    if (port && !SIM.PORTS[SIM.CABLES[cable].conn].includes(port)) return;
+    if (port) for (const k in w.plug) if (w.plug[k] === port) w.plug[k] = "";
+    w.plug[cable] = port; SIM.emit();
+  };
+  SIM.setParam = (k, v) => {
+    const d = D[k]; v = +v;
+    if (!d || isNaN(v)) return;
+    if (d.min !== undefined) v = Math.min(d.max, Math.max(d.min, v));
+    if ((k === "FRAME_CLASS" || k === "FRAME_TYPE") && SIM.state.params[k] !== v) SIM.state.needReboot = true; // 프레임 변경은 재부팅해야 적용
+    SIM.state.params[k] = v; SIM.emit();
+  };
+  SIM.reboot = () => { if (!SIM.power().fcBatt) return "FC 전원이 없습니다."; SIM.state.needReboot = false; SIM.emit(); return ""; };
+
+  // ---------- 전원·신호 경로 ----------
+  SIM.power = () => {
+    const st = SIM.state, w = st.wiring, batt = SIM.has("battery"), pm = SIM.has("pm"), fc = SIM.has("fc");
+    const viaPm = batt && pm && w.batt === "pm";
+    const reverse = viaPm && w.pmOut === "rev";
+    const pdb = SIM.has("frameBot") && ((viaPm && w.pmOut === "ok") || (batt && w.batt === "pdb"));
+    const fcBatt = fc && viaPm && w.plug.pm === "POWER";
+    return { pdb, main: pdb, reverse, fc, fcBatt, battSense: fcBatt && st.params.BATT_MONITOR !== 0 };
+  };
+  SIM.gpsOk = () => SIM.has("gps") && SIM.serialProto(SIM.state.wiring.plug.gps) === 5;
+  SIM.telemOk = () => SIM.has("telem") && [1, 2].includes(SIM.serialProto(SIM.state.wiring.plug.telem));
+  // ESC 통신선: 각 ESC → 하네스 → FC 6핀 포트, 그 포트의 SERIALx_PROTOCOL=16(ESC Telemetry)
+  SIM.escTelemOk = (pos) => SIM.has("esc@" + pos) && SIM.state.wiring.escTelem[pos] === "harness" && SIM.cableReady("escTelem") && SIM.serialProto(SIM.state.wiring.plug.escTelem) === 16;
+  SIM.compassExt = () => SIM.has("gps") && SIM.state.wiring.plug.compass === "I2C";
+  // 수신기: 3선 커넥터가 양쪽 모두 정방향으로 꽂혀야 전원이 들어가고, SBUS 핀 → RC IN 이어야 신호가 FC에 들어간다
+  SIM.rxPowered = () => { const w = SIM.state.wiring; return SIM.has("rx") && SIM.has("fc") && SIM.power().fcBatt && SIM.PORTS.servo.includes(w.plug.rx) && !w.rxRevFc && !!w.rxEnd && !w.rxRevRx; };
+  SIM.rxOk = () => SIM.rxPowered() && SIM.state.wiring.plug.rx === "RC IN" && SIM.state.wiring.rxEnd === "SB" && SIM.state.rxBound;
+  // ---------- 조종기(TX12) 모델 설정과 수신기(R8) 링크 ----------
+  SIM.RX_NAME = "R8"; SIM.RX_PROTO = "FrSky D"; // R8 수신기는 FrSky D(D8) 방식으로만 바인딩된다
+  SIM.TX_PROTOS = ["FrSky D", "FrSky X", "FrSky X2", "Flysky 2A", "DSM2"];
+  SIM.TX_SOURCES = ["", "Ail", "Ele", "Thr", "Rud", "SA", "SB", "SC", "SD"];
+  SIM.txBinding = false;
+  SIM.txLink = () => !!(SIM.tx && SIM.tx.on) && SIM.state.txm.rf === "MULTI" && SIM.state.txm.proto === SIM.RX_PROTO && SIM.state.rxBound;
+  SIM.binding = 0;
+  // 수신기 바인드 버튼: 조종기가 바인드 모드이고 통신 방식이 맞으면 바인딩된다
+  SIM.bindRx = () => {
+    if (!SIM.has("rx")) return "수신기가 장착되지 않았습니다.";
+    if (!SIM.rxPowered()) { SIM.state.bindHeld = !SIM.state.bindHeld; return SIM.state.bindHeld ? "held" : "released"; } // 전원 없이 누르고 있다가 전원을 넣는 방식
+    SIM.binding = Date.now(); SIM.bindUntil = Date.now() + 10000; // 수신기 바인드 대기 (LED 빠르게 깜빡임)
+    return "";
+  };
+  // 매 프레임: 바인드 대기 중 조종기가 맞는 방식으로 바인드하면 연결, 전원을 넣는 순간 버튼을 누르고 있었으면 바인드 대기, 전원이 끊기면 FC 재부팅
+  SIM.bindPoll = () => {
+    const now = Date.now(), powered = SIM.rxPowered(), fc = SIM.power().fcBatt;
+    if (powered && !SIM._rxWas && SIM.state.bindHeld) { SIM.state.bindHeld = false; SIM.binding = now; SIM.bindUntil = now + 10000; }
+    if (SIM._fcWas && !fc && SIM.state.needReboot) { SIM.state.needReboot = false; }
+    const pdbNow = SIM.power().pdb; if (pdbNow && !SIM._pdbWas && SIM.sfx) SIM.sfx("powerup"); SIM._pdbWas = pdbNow; // 전원이 들어오면 ESC 시작음
+    SIM._rxWas = powered; SIM._fcWas = fc;
+    if (!SIM.bindUntil) return;
+    if (!powered || now > SIM.bindUntil) { SIM.binding = 0; SIM.bindUntil = 0; SIM.emit(); return; }
+    const ok = SIM.txBinding && SIM.tx && SIM.tx.on && SIM.state.txm.rf === "MULTI" && SIM.state.txm.proto === SIM.RX_PROTO;
+    if (ok && now - SIM.binding > 1500) { SIM.state.rxBound = true; SIM.txBinding = false; SIM.binding = 0; SIM.bindUntil = 0; SIM.toast("바인딩 완료", "ok"); if (SIM.sfx) SIM.sfx("bind"); SIM.emit(); }
+  };
+  // LED: 전원만 들어오면 빨강, 조종기와 연결되면 초록, 바인딩 중 깜빡임, 조종기를 끄면 다시 빨강
+  SIM.rxLed = () => (!SIM.rxPowered() ? "off" : SIM.binding ? "fast" : SIM.txLink() ? "green" : "red");
+  // 안전 스위치: 눌러서 해제해야 모터 출력이 나간다 (BRD_SAFETYENABLE=0이면 불필요)
+  SIM.switchOk = () => SIM.has("switch") && SIM.state.wiring.plug.switch === "SWITCH";
+  SIM.safetyPressed = false;
+  SIM.safetyOff = () => !SIM.state.params.BRD_SAFETYENABLE || (SIM.safetyPressed && SIM.switchOk());
+
+  // 이 위치의 ESC가 받는 신호가 몇 번 모터 신호인지 (0=신호 없음)
+  SIM.motorNumForPos = (pos) => {
+    const m = /^MAIN OUT (\d)$/.exec(SIM.state.wiring.plug["esc" + pos] || "");
+    if (!m) return 0;
+    const fn = SIM.state.params["SERVO" + m[1] + "_FUNCTION"];
+    return fn >= 33 && fn <= 36 ? fn - 32 : 0;
+  };
+  // 모터선 세 가닥의 순서가 회전 방향을 정한다 (두 가닥을 바꾸면 반대로 돈다)
+  // 반환: "ccw" | "cw" | "open"(한 가닥 빠짐: 떨기만 함) | "short"(두 가닥이 한 단자: ESC 보호 정지) | null(미연결)
+  SIM.motorWiring = (pos) => {
+    const m = SIM.state.wiring.motorWires[pos], v = [m[1], m[2], m[3]], set = v.filter(Boolean);
+    if (new Set(set).size < set.length) return "short";
+    if (set.length === 3) { const o = v.map((x) => "ABC".indexOf(x) + 1).join(""); return ["123", "231", "312"].includes(o) ? "ccw" : "cw"; }
+    return set.length === 2 ? "open" : null;
+  };
+  // 소프트웨어 반전: SERVO_BLH_RVMASK에서 이 ESC가 꽂힌 MAIN OUT 번호의 비트가 켜져 있으면 반대로 돈다
+  SIM.outReversed = (pos) => { const m = /^MAIN OUT (\d)$/.exec(SIM.state.wiring.plug["esc" + pos] || ""); return !!m && !!(SIM.state.params.SERVO_BLH_RVMASK & (1 << (m[1] - 1))); };
+  SIM.motorDir = (pos) => { const r = SIM.motorWiring(pos); if (r !== "cw" && r !== "ccw") return null; return SIM.outReversed(pos) ? (r === "cw" ? "ccw" : "cw") : r; };
+  // 물리적 구동 상태: 돌 수 있는지, 실제 회전 방향, 추력 계수(+1 정상, 음수=바람이 위로)
+  SIM.motorPhysical = (pos) => {
+    const st = SIM.state, motor = SIM.partAt("motor@" + pos), prop = SIM.partAt("prop@" + pos), dir = SIM.motorDir(pos);
+    const lost = SIM.flight && SIM.flight.active && SIM.flight.lost[pos];
+    const canSpin = !!motor && SIM.has("esc@" + pos) && SIM.power().pdb && SIM.escPowered(pos) && !!dir;
+    let thrust = 0;
+    if (prop && !lost && dir) { thrust = prop.dir === dir ? 1 : -0.5; if (st.flip[prop.id]) thrust *= 0.55; }
+    const wr = SIM.motorWiring(pos), jitter = wr === "open" && !!motor && SIM.has("esc@" + pos) && SIM.power().pdb && SIM.escPowered(pos);
+    return { canSpin, dir: dir || "cw", prop: prop && !lost ? prop.dir : null, thrust, loose: !!motor && !!dir && motor.thread !== dir, jitter };
+  };
+
+  const ROT_DEG = (n) => n * 90;
+  // FC 장착 방향과 AHRS_ORIENTATION 설정의 차이 (rad, 오른쪽 회전 +)
+  SIM.mountErr = () => ((ROT_DEG(SIM.state.rot.fc) - SIM.state.params.AHRS_ORIENTATION * 45) * Math.PI) / 180;
+  SIM.fcOffCenter = () => SIM.has("fc") && SIM.state.install.fc !== "deck:C";
+  SIM.gpsOffMast = () => SIM.has("gps") && SIM.state.install.gps !== "mast";
+  SIM.headingErr = () => {
+    if (SIM.compassExt()) {
+      // 마스트에서 내려 달면 전원선·모터 전류의 자기장이 나침반을 흔든다 (전류가 클수록 커짐)
+      const amps = (SIM.flight && SIM.flight.active && SIM.flight.amps) || 0, intf = SIM.gpsOffMast() ? 0.3 + 0.6 * Math.min(1, amps / 120) : 0;
+      return ((ROT_DEG(SIM.state.rot.gps) - SIM.state.params.COMPASS_ORIENT * 45) * Math.PI) / 180 + intf;
+    }
+    return SIM.mountErr(); // 내장 나침반은 FC와 함께 돈다
+  };
+
+  // ---------- 검사 (정답 확인용) ----------
+  SIM.hardwareCheck = () => {
+    const st = SIM.state, w = st.wiring, out = [], exp = SIM.expected();
+    const add = (lvl, t, d) => out.push({ lvl, t, d });
+    const dirKo = (d) => (d === "cw" ? "시계(CW)" : "반시계(CCW)");
+    for (const [id, n] of [["frameBot", "하판"], ["frameTop", "상판"], ["skid", "스키드"]]) if (!SIM.has(id)) add("bad", n, "장착되지 않았습니다.");
+    if (SIM.has("frameTop") && !SIM.has("canopy")) add("warn", "케이스", "씌우지 않았습니다. 비·먼지·약제가 전자부품에 닿습니다.");
+    for (const p of SIM.POS_IDS) { const a = SIM.partAt("arm@" + p); if (!a) add("bad", SIM.POS[p].name + " 붐대", "장착되지 않았습니다."); else if ((SIM.POS[p].z < 0) !== (a.color === "red")) add("warn", SIM.POS[p].name + " 붐대 색", (a.color === "red" ? "빨간" : "흰") + " 붐대입니다. 앞쪽 붐대를 빨간색으로 맞춰야 조종할 때 기수 방향을 알아볼 수 있습니다."); }
+    if (st.params.FRAME_TYPE === 0) add("bad", "프레임 타입", "기체는 X형 암 배치인데 FRAME_TYPE이 Plus로 설정되어 있습니다.");
+    for (const id of SIM.POS_IDS) {
+      const n = SIM.POS[id].name, e = exp[id], motor = SIM.partAt("motor@" + id);
+      if (!motor) { add("bad", n + " 모터", "모터가 장착되지 않았습니다."); continue; }
+      if (!SIM.has("esc@" + id)) { add("bad", n + " ESC", "ESC가 장착되지 않았습니다."); continue; }
+      if (motor.thread !== e.spin) add("bad", n + " 모터 종류", "축 나사 방향이 반대인 모터입니다. 이 위치는 " + dirKo(e.spin) + " 회전용 모터가 필요합니다. 비행 중 프로펠러 너트가 풀립니다.");
+      else add("ok", n + " 모터 종류", dirKo(e.spin) + " 회전용");
+      const num = SIM.motorNumForPos(id), port = w.plug["esc" + id];
+      if (!port) add("bad", n + " ESC 신호선", "FC에 연결되지 않았습니다.");
+      else if (num !== e.num) add("bad", n + " ESC 신호선", port + " → " + (num ? "Motor" + num : "모터 출력 없음") + ". 이 위치는 Motor" + e.num + " 신호가 필요합니다.");
+      else add("ok", n + " ESC 신호선", port + " (Motor" + num + ")");
+      if (!SIM.escPowered(id)) add("bad", n + " ESC 전원 커넥터", "XT60이 PDB에 꽂혀 있지 않습니다.");
+      else add("ok", n + " ESC 전원 커넥터", "PDB " + SIM.xtName(w.escPwr[id]));
+      const dir = SIM.motorDir(id), wr = SIM.motorWiring(id);
+      if (wr === "short") add("bad", n + " 모터선", "두 가닥이 같은 ESC 단자에 연결되어 있습니다 (단락).");
+      else if (wr === "open") add("bad", n + " 모터선", "세 가닥 중 하나가 ESC에 연결되지 않았습니다. 모터가 떨기만 하고 돌지 않습니다.");
+      else if (!dir) add("bad", n + " 모터선", "모터 3상 선이 ESC에 연결되지 않았습니다.");
+      else if (dir !== e.spin) add("bad", n + " 모터 회전 방향", "현재 " + dirKo(dir) + ". 이 위치는 " + dirKo(e.spin) + " 방향이어야 합니다. 모터선 두 가닥을 바꾸거나 SERVO_BLH_RVMASK로 반전해야 합니다.");
+      else add("ok", n + " 모터 회전 방향", dirKo(e.spin));
+      if (w.escTelem[id] !== "harness") add("warn", n + " ESC 통신선", "하네스에 연결되지 않아 이 ESC의 회전수·전류·온도를 받을 수 없습니다.");
+      else add("ok", n + " ESC 통신선", "하네스 연결");
+      const pr = SIM.partAt("prop@" + id);
+      if (!pr) add("bad", n + " 프로펠러", "프로펠러가 없습니다.");
+      else {
+        if (pr.dir !== e.spin) add("bad", n + " 프로펠러 종류", pr.dir.toUpperCase() + "용 프로펠러가 달려 있습니다. 이 위치는 " + e.spin.toUpperCase() + "용이 필요합니다.");
+        else add("ok", n + " 프로펠러 종류", e.spin.toUpperCase() + "용");
+        if (st.flip[pr.id]) add("bad", n + " 프로펠러 방향", "위아래가 뒤집혀 끼워져 있습니다.");
+      }
+    }
+    for (const p of SIM.PARTS) {
+      if (!SIM.SCREW_HOLES[p.type] || !st.install[p.id]) continue;
+      const ss = SIM.screwState(p.id), n = SIM.SCREW_HOLES[p.type], req = SIM.SCREW_REQ[p.type], label = p.name + " (" + SIM.slotName(st.install[p.id]) + ") 나사";
+      if (ss === "ok") add("ok", label, "M" + req + " " + n + "개 체결");
+      else if (ss === "loose") add("bad", label, "M" + req + " 구멍에 더 작은 나사가 체결되어 헐겁습니다.");
+      else if (ss === "untight") add("bad", label, "나사를 끼웠지만 육각렌치로 조이지 않았습니다.");
+      else add("bad", label, n + "개 중 " + SIM.screwCount(p.id) + "개만 체결 (M" + req + " 필요)");
+    }
+    if (!SIM.has("fc")) add("bad", "비행 컨트롤러", "FC가 장착되지 않았습니다.");
+    else if (SIM.fcOffCenter()) add("bad", "FC 위치", SIM.slotName(st.install.fc) + "에 있습니다. 무게 중심(상판 중앙)에서 벗어나 진동과 가속도 오차가 커집니다.");
+    else if (Math.abs(Math.sin(SIM.mountErr() / 2)) > 0.01) add("bad", "FC 장착 방향", "화살표가 앞에서 오른쪽으로 " + ROT_DEG(st.rot.fc) + "° 돌아가 있고 AHRS_ORIENTATION은 " + ORI[st.params.AHRS_ORIENTATION] + "입니다.");
+    else add("ok", "FC 장착 방향", st.rot.fc ? "돌려 달았지만 AHRS_ORIENTATION으로 보정됨" : "화살표가 앞쪽");
+    if (!SIM.has("battery")) add("bad", "배터리", "장착되지 않았습니다.");
+    else if (!w.batt) add("bad", "배터리 커넥터", "연결되지 않았습니다.");
+    else if (w.batt === "pdb") add("bad", "배터리 커넥터", "PDB에 직접 연결되어 PMU을 거치지 않습니다. FC에 전원과 전압 정보가 가지 않습니다.");
+    else add("ok", "배터리 커넥터", "PMU 입력");
+    if (!SIM.has("pm")) add("bad", "PMU", "장착되지 않았습니다.");
+    else {
+      if (!w.pmOut) add("bad", "PMU 출력 커넥터", "XT60이 PDB 주전원에 꽂혀 있지 않습니다.");
+      else add("ok", "PMU 출력 커넥터", "PDB 주전원 XT60");
+      if (w.plug.pm !== "POWER") add("bad", "PMU 케이블", w.plug.pm ? w.plug.pm + " 포트에 꽂혀 있습니다. POWER 포트여야 합니다." : "FC에 연결되지 않았습니다.");
+      else add("ok", "PMU 케이블", "POWER 포트");
+    }
+    if (!SIM.has("rx")) add("bad", "수신기", "장착되지 않았습니다.");
+    else if (w.rxRevRx || w.rxRevFc) add("bad", "수신기 커넥터 방향", (w.rxRevRx ? "수신기 쪽" : "") + (w.rxRevRx && w.rxRevFc ? "과 " : "") + (w.rxRevFc ? "FC 쪽" : "") + " 3선 커넥터가 반대로 꽂혀 있습니다. 전원과 신호가 들어가지 않습니다.");
+    else if (w.rxEnd !== "SB") add("bad", "수신기 쪽 핀", w.rxEnd ? "채널 " + w.rxEnd + " (PWM) 핀에 꽂혀 있습니다. 픽스호크 RC IN은 SBUS 핀에서 나오는 신호를 읽습니다." : "수신기에 커넥터가 꽂혀 있지 않습니다.");
+    else if (w.plug.rx !== "RC IN") add("bad", "수신기 신호선", w.plug.rx ? w.plug.rx + " 포트에 꽂혀 있습니다. RC IN이어야 합니다." : "FC에 연결되지 않았습니다.");
+    else if (!st.rxBound) add("bad", "수신기 바인딩", "송신기와 바인딩되지 않았습니다 (LED 빨강 깜빡임).");
+    else add("ok", "수신기 신호선", "SBUS 핀 → RC IN, 바인딩 완료");
+    if (!SIM.has("gps")) add("bad", "GPS · 나침반", "장착되지 않았습니다.");
+    else {
+      if (SIM.gpsOffMast()) add("bad", "GPS 위치", SIM.slotName(st.install.gps) + "에 있습니다. 전원선·모터와 가까워 나침반이 자기 간섭을 받습니다.");
+      if (w.plug.gps !== "GPS") add("bad", "GPS 케이블 (6핀)", w.plug.gps ? w.plug.gps + " 포트에 꽂혀 있습니다. GPS 포트여야 합니다." : "FC에 연결되지 않았습니다.");
+      else add("ok", "GPS 케이블 (6핀)", "GPS 포트");
+      if (w.plug.compass !== "I2C") add("bad", "나침반 케이블 (4핀)", w.plug.compass ? w.plug.compass + " 포트에 꽂혀 있습니다. I2C 포트여야 합니다." : "FC에 연결되지 않았습니다. 외장 나침반을 쓰지 못합니다.");
+      else if (Math.abs(Math.sin(SIM.headingErr() / 2)) > 0.01) add("bad", "GPS 장착 방향", "화살표가 앞에서 오른쪽으로 " + ROT_DEG(st.rot.gps) + "° 돌아가 있습니다 (COMPASS_ORIENT " + ORI[st.params.COMPASS_ORIENT] + ").");
+      else add("ok", "나침반 케이블 (4핀)", "I2C 포트, 방향 일치");
+    }
+    if (!SIM.has("switch")) add(st.params.BRD_SAFETYENABLE ? "bad" : "warn", "안전 스위치", "장착되지 않았습니다." + (st.params.BRD_SAFETYENABLE ? " BRD_SAFETYENABLE=1이면 시동을 걸 수 없습니다." : ""));
+    else if (w.plug.switch !== "SWITCH") add(st.params.BRD_SAFETYENABLE ? "bad" : "warn", "안전 스위치 케이블", w.plug.switch ? w.plug.switch + " 포트에 꽂혀 있습니다. SWITCH 포트여야 합니다." : "FC에 연결되지 않았습니다.");
+    else add("ok", "안전 스위치", "SWITCH 포트");
+    if (!SIM.has("buzzer")) add("warn", "부저", "장착되지 않았습니다. 시동·경고음을 들을 수 없습니다.");
+    else if (w.plug.buzzer !== "BUZZER") add("warn", "부저 케이블", "BUZZER 포트에 연결되지 않았습니다.");
+    else add("ok", "부저", "BUZZER 포트");
+    if (SIM.POS_IDS.some((id) => w.escTelem[id] === "harness")) {
+      const pt = w.plug.escTelem, pr = SIM.serialProto(pt);
+      if (!pt) add("warn", "ESC 통신선 하네스", "FC에 연결되지 않았습니다.");
+      else if (pr !== 16) add("warn", "ESC 통신선 하네스", pt + " 포트에 꽂혀 있지만 " + (SIM.SERIAL_OF[pt] ? "SERIAL" + SIM.SERIAL_OF[pt] + "_PROTOCOL이 16(ESC Telemetry)이 아닙니다." : "시리얼 포트가 아닙니다."));
+      else add("ok", "ESC 통신선 하네스", pt + " (ESC Telemetry)");
+    }
+    if (!SIM.has("telem")) add("warn", "텔레메트리", "장착되지 않았습니다. (선택 장비)");
+    else if (!SIM.telemOk()) add("warn", "텔레메트리 케이블", (w.plug.telem || "미연결") + " — MAVLink로 설정된 시리얼 포트(TELEM1/TELEM2)여야 합니다. (선택 장비)");
+    else add("ok", "텔레메트리", w.plug.telem + " 포트");
+    return out;
+  };
+
+  // 소프트웨어 설정 검사 (결과 보고용)
+  SIM.softwareCheck = () => {
+    const p = SIM.state.params, c = SIM.state.cal, out = [], add = (t, d, e) => out.push({ lvl: "bad", t, d, e });
+    if (p.FRAME_CLASS !== 1) add("프레임 클래스", "FRAME_CLASS가 Quad가 아닙니다.", "시동 불가");
+    if (p.FRAME_TYPE !== 1) add("프레임 타입", "FRAME_TYPE이 X가 아닙니다 (기체는 X형).", p.FRAME_TYPE === 3 ? "요 제어가 반대로 걸려 제자리 회전 후 추락" : "조종 반응이 45° 비틀림");
+    if (!c.accel) add("가속도계 교정", "교정하지 않았습니다.", "시동 불가 (PreArm: 3D Accel calibration needed)");
+    if (!c.compass) add("나침반 교정", "교정하지 않았습니다.", "시동 불가, 방위 오차");
+    if (!c.radio) add("라디오 교정", "교정하지 않았습니다.", "시동 불가 (PreArm: RC not calibrated)");
+    if (!c.esc) add("ESC 교정", "교정하지 않았습니다.", "모터마다 회전수가 달라 한쪽으로 흐름");
+    for (const d of SIM.rcDirections()) if (!d.ok) add(d.name + " 방향", "스틱을 " + d.move + " FC에서 반대로 인식합니다 (조종기 출력 반전 " + (d.inv ? "ON" : "OFF") + ", RC" + d.ch + "_REVERSED=" + (d.rev ? 1 : 0) + ").", "스틱과 반대로 움직여 조종 불능");
+    if (!SIM.state.txCal) add("조종기 스틱 캘리브레이션", "TX12 SYS 메뉴의 Calibration을 하지 않았습니다.", "스틱 중립·끝점이 틀어져 조종량 부족, 중립에서 기체가 흐름");
+    if (SIM.state.needReboot) add("FC 재부팅", "교정·프레임 설정 변경 후 재부팅하지 않았습니다.", "시동 불가");
+    if (!p.FS_THR_ENABLE) add("라디오 페일세이프", "FS_THR_ENABLE=0 (꺼짐)", "송신기 신호가 끊기면 추락");
+    if (!p.BATT_MONITOR) add("배터리 모니터", "BATT_MONITOR=0 (꺼짐)", "전압을 알 수 없어 배터리 페일세이프 동작 안 함");
+    if (!(p.BATT_LOW_VOLT > 0 && p.BATT_FS_LOW_ACT)) add("배터리 페일세이프", "저전압 기준 또는 동작이 설정되지 않았습니다.", "배터리 방전 시 추락 위험");
+    const tm = SIM.state.txm;
+    if (tm.mode !== 2) add("조종기 스틱 모드", "Mode " + tm.mode + "로 설정되어 있습니다 (Mode 2 기준).", "스로틀·피치 스틱이 바뀌어 조종 실수");
+    if (tm.rf !== "MULTI" || tm.proto !== SIM.RX_PROTO) add("조종기 통신 방식", tm.rf === "MULTI" ? tm.proto + " (수신기 R8은 " + SIM.RX_PROTO + ")" : "내장 RF가 꺼져 있습니다.", "수신기와 연결 안 됨, 시동 불가");
+    else if (!SIM.state.rxBound) add("바인딩", "조종기와 수신기가 바인딩되지 않았습니다.", "수신기와 연결 안 됨, 시동 불가");
+    const want = { 1: "Ail", 2: "Ele", 3: "Thr", 4: "Rud" };
+    for (let i = 1; i <= 4; i++) if (tm.mix[i] !== want[i] && p.RCMAP_ROLL === 1 && p.RCMAP_PITCH === 2 && p.RCMAP_THROTTLE === 3 && p.RCMAP_YAW === 4) add("조종기 채널 " + i, "CH" + i + " 소스가 " + (tm.mix[i] || "없음") + " (FC는 CH" + i + "을 " + { 1: "롤(Ail)", 2: "피치(Ele)", 3: "스로틀(Thr)", 4: "요(Rud)" }[i] + "으로 읽음)", "스틱과 다른 축이 움직여 조종 불능");
+    if (!["SA", "SB", "SC", "SD"].includes(tm.mix[p.FLTMODE_CH])) add("비행 모드 스위치", "CH" + p.FLTMODE_CH + "에 스위치가 지정되지 않았습니다.", "비행 모드를 바꿀 수 없음");
+    if (tm.failsafe === "Not set" || tm.failsafe === "Hold") add("조종기 페일세이프", tm.failsafe + " — 신호가 끊겨도 마지막 값을 유지합니다.", "송신기 신호가 끊겨도 FC가 알아채지 못해 기체가 계속 날아감");
+    if (Math.abs(Math.sin(SIM.mountErr() / 2)) > 0.01) add("보드 방향", "FC 장착 방향과 AHRS_ORIENTATION이 맞지 않습니다.", "이륙 직후 전복");
+    if (!SIM.escTelemOk("FR") && SIM.state.wiring.escTelem.FR === "harness") add("ESC 텔레메트리 시리얼", "하네스 포트의 SERIALx_PROTOCOL이 16이 아닙니다.", "ESC 회전수·온도를 받지 못함");
+    return out;
+  };
+  // 채널 방향: 조종기 원래 출력은 스틱 오른쪽·위(앞)로 PWM 증가. ArduPilot은 피치만 앞으로 밀 때 PWM 감소여야 한다
+  SIM.rcDirections = () => {
+    const p = SIM.state.params, tm = SIM.state.txm;
+    return [["롤", p.RCMAP_ROLL, 1, "오른쪽으로 밀면"], ["피치", p.RCMAP_PITCH, -1, "앞으로 밀면"], ["스로틀", p.RCMAP_THROTTLE, 1, "올리면"], ["요", p.RCMAP_YAW, 1, "오른쪽으로 밀면"]].map(([name, ch, want, move]) => {
+      const inv = !!tm.inv[ch], rev = !!p["RC" + ch + "_REVERSED"];
+      return { name, ch, inv, rev, move, ok: (inv ? -1 : 1) * (rev ? -1 : 1) === want };
+    });
+  };
+  // 시동 전 점검 (FC가 스스로 알아낼 수 있는 것만)
+  SIM.prearm = (mode) => {
+    const st = SIM.state, p = st.params, pw = SIM.power(), f = [];
+    if (!pw.fc) return ["비행 컨트롤러가 없습니다"];
+    if (!pw.fcBatt) return ["FC에 배터리 전원이 들어오지 않습니다"];
+    if (p.FRAME_CLASS !== 1) f.push("PreArm: Check frame class and type (FRAME_CLASS가 Quad가 아님)");
+    if (![33, 34, 35, 36].every((fn) => [1, 2, 3, 4, 5, 6, 7, 8].some((n) => p["SERVO" + n + "_FUNCTION"] === fn))) f.push("PreArm: Check SERVOx_FUNCTION (모터 출력 4개가 모두 지정되지 않음)");
+    if (!SIM.safetyOff()) f.push("PreArm: Hardware safety switch (안전 스위치가 해제되지 않음)");
+    if (st.needReboot) f.push(st.cal.compass ? "PreArm: Compass calibrated requires reboot / 설정 변경 후 재부팅 필요" : "PreArm: Reboot required (설정 변경 후 재부팅 필요)");
+    if (p.ARMING_CHECK) {
+      if (!st.cal.accel) f.push("PreArm: 3D Accel calibration needed");
+      if (!st.cal.compass) f.push("PreArm: Compass not calibrated");
+      if (!SIM.rxOk()) f.push("PreArm: RC not found (수신기 신호 없음)");
+      else if (!st.cal.radio) f.push("PreArm: RC not calibrated");
+      if ((mode === 5 || mode === 6) && !SIM.gpsOk()) f.push("PreArm: GPS: need 3D fix (이 모드는 GPS 필요)");
+    }
+    return f;
+  };
+
+  // ---------- 일괄 작업 ----------
+  SIM.autoAssemble = () => {
+    const st = SIM.state, fresh = defaults();
+    st.install = fresh.install; st.rot = { fc: 0, gps: 0 }; st.flip = fresh.flip; st.wiring = fresh.wiring; st.bench = {}; st.screws = {};
+    for (let i = 1; i <= 8; i++) st.params["SERVO" + i + "_FUNCTION"] = i <= 4 ? 32 + i : 0;
+    const exp = SIM.expected(), w = st.wiring;
+    const take = (type, key, val) => parts.find((p) => p.type === type && p[key] === val && !st.install[p.id]);
+    SIM.POS_IDS.forEach((id, i) => {
+      st.install[take("motor", "thread", exp[id].spin).id] = "motor@" + id;
+      st.install["esc" + (i + 1)] = "esc@" + id;
+      st.install[take("prop", "dir", exp[id].spin).id] = "prop@" + id;
+      w.plug["esc" + id] = "MAIN OUT " + exp[id].num;
+      w.escPwr[id] = SIM.XT_OF[id][0];
+      w.motorWires[id] = exp[id].spin === "ccw" ? { 1: "A", 2: "B", 3: "C" } : { 1: "A", 2: "C", 3: "B" };
+      w.escTelem[id] = "harness";
+    });
+    Object.assign(st.install, { canopy: "frame:canopy", frameBot: "frame:base", frameTop: "frame:top", skid: "frame:skid", arm1: "arm@FR", arm2: "arm@FL", arm3: "arm@RR", arm4: "arm@RL", fc: "deck:C", gps: "mast", pm: "bot:C", battery: "under", rx: "deck:L", telem: "deck:R", buzzer: "deck:RL", switch: "deck:RR" });
+    Object.assign(w.plug, { pm: "POWER", gps: "GPS", compass: "I2C", rx: "RC IN", telem: "TELEM1", buzzer: "BUZZER", switch: "SWITCH", escTelem: "TELEM2" });
+    w.batt = "pm"; w.pmOut = "ok"; w.rxEnd = "SB"; w.rxRevRx = false; w.rxRevFc = false; st.rxBound = true;
+    SIM.fastenAll();
+    SIM.selected = null;
+    SIM.emit();
+  };
+  SIM.autoConfigure = () => {
+    const st = SIM.state, p = st.params, tx = SIM.TX;
+    Object.assign(p, { FRAME_CLASS: 1, FRAME_TYPE: 1, AHRS_ORIENTATION: 0, COMPASS_ORIENT: 0, ARMING_CHECK: 1, BRD_SAFETYENABLE: 1, SERIAL1_PROTOCOL: 2, SERIAL2_PROTOCOL: 16, SERIAL3_PROTOCOL: 5, SERIAL4_PROTOCOL: 5 });
+    for (const c of [1, 2, 4]) { p["RC" + c + "_MIN"] = tx.c[c] - tx.amp[c]; p["RC" + c + "_MAX"] = tx.c[c] + tx.amp[c]; p["RC" + c + "_TRIM"] = tx.c[c]; p["RC" + c + "_REVERSED"] = 0; }
+    Object.assign(p, { RC3_MIN: tx.thrMin, RC3_MAX: tx.thrMax, RC3_TRIM: tx.thrMin, RC3_REVERSED: 0, RCMAP_ROLL: 1, RCMAP_PITCH: 2, RCMAP_THROTTLE: 3, RCMAP_YAW: 4, FLTMODE_CH: 5 });
+    Object.assign(p, { FLTMODE1: 0, FLTMODE2: 0, FLTMODE3: 0, FLTMODE4: 2, FLTMODE5: 2, FLTMODE6: 5 });
+    Object.assign(p, { FS_THR_ENABLE: 1, FS_THR_VALUE: 975, BATT_MONITOR: 4, BATT_CAPACITY: 16000, BATT_LOW_VOLT: 21, BATT_FS_LOW_ACT: 2 });
+    Object.assign(p, { COMPASS_OFS_X: -42, COMPASS_OFS_Y: 118, COMPASS_OFS_Z: 63 });
+    for (const k in D) if (/^(ATC_|MOT_|ANGLE|PILOT|RTL)/.test(k)) p[k] = D[k].d;
+    st.cal = { accel: true, compass: true, radio: true, esc: true };
+    st.txm = { name: "QUAD", mode: 2, rf: "MULTI", proto: SIM.RX_PROTO, failsafe: "No pulses", mix: { 1: "Ail", 2: "Ele", 3: "Thr", 4: "Rud", 5: "SC", 6: "", 7: "", 8: "" }, inv: { 2: true } }; st.rxBound = true; st.txCal = true; st.needReboot = false;
+    SIM.emit();
+  };
+  SIM.fastenAll = () => { for (const p of SIM.PARTS) { const n = SIM.SCREW_HOLES[p.type]; if (n && SIM.state.install[p.id]) for (let i = 0; i < n; i++) SIM.state.screws[p.id + ":" + i] = SIM.SCREW_REQ[p.type] + "t"; } };
+  SIM.resetAll = () => { SIM.state = defaults(); SIM.selected = null; SIM.faults = null; SIM.emit(); };
+
+  // ---------- 고장 진단 훈련 ----------
+  const pick = (a) => a[Math.floor(Math.random() * a.length)];
+  const adj = () => { const a = pick(["FR", "RL"]), b = pick(["RR", "FL"]); return [a, b]; };
+  const swapSlots = (ta, tb) => { const i = SIM.state.install, pa = SIM.partAt(ta), pb = SIM.partAt(tb); i[pa.id] = tb; i[pb.id] = ta; };
+  const FAULTS = [
+    () => { const a = pick(SIM.POS_IDS), m = SIM.state.wiring.motorWires[a], t = m[1]; m[1] = m[2]; m[2] = t; return { desc: SIM.POS[a].name + " 모터선 두 가닥이 바뀌어 반대로 돕니다.", present: () => SIM.motorDir(a) !== SIM.expected()[a].spin }; },
+    () => { const a = pick(SIM.POS_IDS); SIM.state.wiring.motorWires[a][1 + Math.floor(Math.random() * 3)] = ""; return { desc: SIM.POS[a].name + " 모터선 한 가닥이 ESC에서 빠져 있습니다.", present: () => SIM.motorWiring(a) !== SIM.expected()[a].spin }; },
+    () => { const [a, b] = adj(), w = SIM.state.wiring, t = w.plug["esc" + a]; w.plug["esc" + a] = w.plug["esc" + b]; w.plug["esc" + b] = t; return { desc: SIM.POS[a].name + "과 " + SIM.POS[b].name + " ESC 신호선이 서로 바뀌어 꽂혀 있습니다.", present: () => [a, b].some((x) => SIM.motorNumForPos(x) !== SIM.expected()[x].num) }; },
+    () => { const [a, b] = adj(); swapSlots("prop@" + a, "prop@" + b); return { desc: SIM.POS[a].name + "과 " + SIM.POS[b].name + "의 프로펠러 종류가 서로 바뀌어 달려 있습니다.", present: () => [a, b].some((x) => { const p = SIM.partAt("prop@" + x); return !p || p.dir !== SIM.expected()[x].spin; }) }; },
+    () => { const a = pick(SIM.POS_IDS), pr = SIM.partAt("prop@" + a); SIM.state.flip[pr.id] = true; return { desc: SIM.POS[a].name + " 프로펠러가 뒤집혀 끼워져 있습니다.", present: () => { const p = SIM.partAt("prop@" + a); return !!p && SIM.state.flip[p.id]; } }; },
+    () => { const [a, b] = adj(); swapSlots("motor@" + a, "motor@" + b); return { desc: SIM.POS[a].name + "과 " + SIM.POS[b].name + "의 모터 종류(축 나사 방향)가 바뀌어 있습니다. 비행 중 프로펠러가 풀려 나갑니다.", present: () => [a, b].some((x) => { const m = SIM.partAt("motor@" + x); return !m || m.thread !== SIM.expected()[x].spin; }) }; },
+    () => { const a = pick(SIM.POS_IDS); SIM.state.wiring.escPwr[a] = ""; return { desc: SIM.POS[a].name + " ESC의 XT60 전원 커넥터가 PDB에서 빠져 있습니다.", present: () => !SIM.escPowered(a) }; },
+    () => { SIM.state.rot.fc = pick([1, 2, 3]); return { desc: "FC가 돌아간 방향으로 장착되어 있는데 AHRS_ORIENTATION 보정이 없습니다.", present: () => Math.abs(Math.sin(SIM.mountErr() / 2)) > 0.01 }; },
+    () => { const i = SIM.state.install; i.rx = "bot:C"; i.fc = "deck:L"; return { desc: "FC가 상판 중앙이 아닌 상판 왼쪽에 장착되어 있습니다.", present: () => SIM.fcOffCenter() }; },
+    () => { const i = SIM.state.install, t = i.telem; i.telem = "bot:C"; i.gps = t; return { desc: "GPS·나침반 모듈이 마스트가 아닌 상판 위에 직접 장착되어 있습니다 (자기 간섭).", present: () => SIM.gpsOffMast() }; },
+    () => { SIM.state.rot.gps = 2; return { desc: "GPS·나침반 모듈이 뒤를 향해 장착되어 있습니다.", present: () => Math.abs(Math.sin(SIM.headingErr() / 2)) > 0.01 }; },
+    () => { SIM.state.wiring.plug.rx = "SBUS OUT"; return { desc: "수신기 신호선이 RC IN이 아닌 SBUS OUT 포트에 꽂혀 있습니다.", present: () => !SIM.rxOk() }; },
+    () => { SIM.state.wiring.rxRevFc = true; return { desc: "수신기 3선 커넥터가 FC 쪽에서 반대로 꽂혀 있습니다.", present: () => !SIM.rxOk() }; },
+    () => { SIM.state.wiring.rxEnd = "1"; return { desc: "수신기 쪽 커넥터가 SBUS가 아닌 채널 1(PWM) 핀에 꽂혀 있습니다.", present: () => !SIM.rxOk() }; },
+    () => { SIM.state.rxBound = false; return { desc: "수신기가 송신기와 바인딩되어 있지 않습니다.", present: () => !SIM.state.rxBound }; },
+    () => { const w = SIM.state.wiring; w.plug.gps = w.plug.telem === "TELEM2" ? "TELEM1" : "TELEM2"; return { desc: "GPS 케이블이 TELEM 포트에 꽂혀 있습니다.", present: () => !SIM.gpsOk() }; },
+    () => { SIM.state.wiring.plug.switch = "ADC 3.3V"; return { desc: "안전 스위치 케이블이 SWITCH가 아닌 ADC 3.3V 포트에 꽂혀 있습니다.", present: () => SIM.state.params.BRD_SAFETYENABLE === 1 && !SIM.switchOk() }; },
+    () => { SIM.state.wiring.plug.pm = "SERIAL 4/5"; return { desc: "PMU 케이블이 SERIAL 4/5 포트에 꽂혀 있습니다.", present: () => SIM.state.wiring.plug.pm !== "POWER" }; },
+    () => { SIM.state.params.RC2_REVERSED = 1; return { desc: "피치 채널이 조종기 출력 반전과 RC2_REVERSED로 이중 반전되어 있습니다.", present: () => !SIM.rcDirections()[1].ok }; },
+    () => { SIM.state.params.FS_THR_ENABLE = 0; return { desc: "라디오 페일세이프가 꺼져 있습니다 (FS_THR_ENABLE=0).", present: () => SIM.state.params.FS_THR_ENABLE === 0 }; },
+    () => { const p = SIM.state.params; p.SERVO1_FUNCTION = 34; p.SERVO2_FUNCTION = 33; return { desc: "SERVO1_FUNCTION과 SERVO2_FUNCTION이 서로 바뀌어 있습니다.", present: () => SIM.POS_IDS.some((x) => SIM.motorNumForPos(x) !== SIM.expected()[x].num) }; },
+    () => { SIM.state.params.FRAME_TYPE = 0; return { desc: "FRAME_TYPE이 Plus로 설정되어 있습니다 (기체는 X형).", present: () => SIM.state.params.FRAME_TYPE === 0 }; },
+    () => { SIM.state.params.BATT_LOW_VOLT = 0; return { desc: "배터리 저전압 페일세이프가 꺼져 있습니다 (BATT_LOW_VOLT=0).", present: () => !(SIM.state.params.BATT_LOW_VOLT > 0 && SIM.state.params.BATT_FS_LOW_ACT) }; },
+  ];
+  SIM.startFaultDrill = (n) => {
+    SIM.autoAssemble(); SIM.autoConfigure();
+    const pool = FAULTS.slice(), list = [];
+    while (list.length < n && pool.length) list.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]());
+    SIM.faults = { list, revealed: false };
+    SIM.emit();
+  };
+})();
