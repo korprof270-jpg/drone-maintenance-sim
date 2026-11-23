@@ -23,7 +23,7 @@
     dark: mat(0x16181a), blue: mat(0x2b62c4), yellow: mat(0xe2b322), copper: mat(0xb86b2c, { metalness: 0.6, roughness: 0.4 }),
     prop: mat(0x2c2f33, { roughness: 0.35 }), green: mat(0x2f8a54), plug: mat(0xece6d2, { roughness: 0.7 }),
   };
-  const HIT = new T.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false });
+  const HIT = new T.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false, visible: false }); // 클릭 영역: 그리지 않고 클릭 판정에만 쓴다
   // 카본 직조 무늬 (트윌) + 클리어코트
   const carbonTex = (() => { const c = document.createElement("canvas"); c.width = c.height = 128; const g = c.getContext("2d"); for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) { const k = (x + y) % 4 < 2; const gr = g.createLinearGradient(x * 8, y * 8, x * 8 + 8, y * 8 + 8); gr.addColorStop(0, k ? "#2c3034" : "#17191c"); gr.addColorStop(1, k ? "#1b1e21" : "#24272b"); g.fillStyle = gr; g.fillRect(x * 8, y * 8, 8, 8); } const t = new T.CanvasTexture(c); t.wrapS = t.wrapT = T.RepeatWrapping; t.repeat.set(6, 6); t.colorSpace = T.SRGBColorSpace; t.anisotropy = 8; return t; })();
   // 높이(밝기) 그림 → 노멀맵: 카본 직조·나뭇결·금속 결이 빛을 받아 입체적으로 보이게 한다
@@ -162,6 +162,13 @@
   M.accent = new T.MeshPhysicalMaterial({ color: new T.Color(0xc0392b), metalness: 0.9, roughness: 0.3 });
   M.winding = new T.MeshPhysicalMaterial({ color: new T.Color(0xc87533), metalness: 0.85, roughness: 0.32, clearcoat: 0.6, clearcoatRoughness: 0.2 });
   M.core = new T.MeshStandardMaterial({ color: new T.Color(0x2a2c2f), metalness: 0.7, roughness: 0.5 });
+  M.shrinkBlue = new T.MeshPhysicalMaterial({ color: new T.Color(0x2463c9), roughness: 0.28, metalness: 0, clearcoat: 0.9, clearcoatRoughness: 0.15 });
+  M.lid = new T.MeshPhysicalMaterial({ color: new T.Color(0x2b2f35), metalness: 0.85, roughness: 0.38, roughnessMap: brushed, clearcoat: 0.3 });
+  M.housing = new T.MeshPhysicalMaterial({ color: new T.Color(0xece4cc), roughness: 0.55, clearcoat: 0.2 });
+  M.slot = new T.MeshStandardMaterial({ color: 0x0b0b0b, roughness: 0.9 });
+  M.pin = new T.MeshStandardMaterial({ color: new T.Color(0xd9c37a), metalness: 1, roughness: 0.25 });
+  M.rubber = new T.MeshStandardMaterial({ color: new T.Color(0x1b1b1c), roughness: 0.85 });
+  M.glow = (c) => new T.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 2.2, roughness: 0.3 });
   M.propC = (() => { const t = carbonTex.clone(); t.repeat.set(1, 1); t.needsUpdate = true; return new T.MeshPhysicalMaterial({ color: 0xffffff, map: t, roughness: 0.34, metalness: 0.1, clearcoat: 1, clearcoatRoughness: 0.08, side: T.DoubleSide }); })();
 
   // FC 윗면 포트 위치 (FC 모형 좌표, 앞쪽 = -z). 서보 레일은 뒤쪽 한 줄: RC IN, SBUS OUT, MAIN 1–8, AUX 1–6
@@ -226,8 +233,13 @@
       g.add(sp, disc); o.spinner = sp; o.disc = disc;
       sp.traverse((m) => { if (m.isMesh) m.userData.plate = true; }); // 프로펠러 전체(날개·인쇄·허브)는 아래 부품 클릭을 가리지 않는다
     } else if (part.type === "esc") {
-      g.add(roundBox(0.024, 0.008, 0.048, M.blue, 0, 0.004, 0, 0.004));
-      const el = nameplate("ESC", 0.018, 0.009, "#e2b322", "#1a1a1a"); el.position.set(0, 0.0083, -0.006); g.add(el);
+      // 수축 튜브로 감싼 기판 + 윗면 알루미늄 방열판(핀) + 콘덴서 + 라벨
+      g.add(roundBox(0.024, 0.0072, 0.048, M.shrinkBlue, 0, 0.0036, 0, 0.0034));
+      g.add(roundBox(0.018, 0.0012, 0.026, M.aluLight, 0, 0.0076, -0.004, 0.0015));
+      for (let k = 0; k < 6; k++) g.add(box(0.0009, 0.0018, 0.024, M.aluLight, -0.0075 + k * 0.003, 0.0091, -0.004));
+      { const cp = cyl(0.0032, 0.012, mat(0x1d1f22, { roughness: 0.4 }), 0.0, 0.0034, 0.0, 20); cp.rotation.z = Math.PI / 2; cp.position.set(0, 0.0034, -0.027); g.add(cp); g.add(cyl(0.0033, 0.0008, M.aluLight, 0.0062, 0.0034, -0.027, 20).rotateZ(Math.PI / 2)); }
+      const el = nameplate("ESC 60A", 0.016, 0.005, "#e2b322", "#1a1a1a"); el.position.set(0, 0.0074, 0.0125); g.add(el);
+      ["A", "B", "C"].forEach((p, k) => g.add(cyl(0.0014, 0.001, M.aluLight, (k - 1) * 0.007, 0.0099, 0.019, 16))); // 납땜 덩어리
       ["A", "B", "C"].forEach((p, k) => { const pd = box(0.005, 0.0016, 0.006, M.copper, (k - 1) * 0.007, 0.0088, 0.019); g.add(pd); o.pads[p] = new T.Vector3((k - 1) * 0.007, 0.0096, 0.019); target(g, mesh(new T.BoxGeometry(0.0068, 0.006, 0.009), HIT, (k - 1) * 0.007, 0.0096, 0.019), { kind: "escPad", part: part.id, pad: p, label: "ESC 단자 " + p }).userData.tip = { part: part.id, key: "pad" + p }; });
       lead(o, "pwr", [-0.006, 0.004, -0.024], [-0.01, 0.004, -0.034], LEAD.r, 0.0018);
       { const k2 = new T.CatmullRomCurve3([new T.Vector3(-0.003, 0.004, -0.024), new T.Vector3(-0.006, 0.006, -0.029), new T.Vector3(-0.008, 0.004, -0.034)]); const t2 = new T.Mesh(new T.TubeGeometry(k2, 8, 0.0018, 5), LEAD.k); g.add(t2); }
@@ -235,7 +247,12 @@
       lead(o, "sig", [0.0035, 0.005, -0.024], [0.0045, 0.004, -0.034], LEAD.w, 0.0009, true);
       lead(o, "tel", [0.008, 0.005, -0.024], [0.01, 0.004, -0.032], LEAD.o, 0.0008, true);
     } else if (part.type === "fc") {
-      g.add(roundBox(0.05, 0.015, 0.082, mat(0x1c1f23, { roughness: 0.45, metalness: 0.3 }), 0, 0.0075, 0, 0.006));
+      // 아래 케이스(플라스틱) + 위 덮개(아노다이징 알루미늄) + 상태 LED 창 + 옆 통풍구 + microSD
+      g.add(roundBox(0.05, 0.0092, 0.082, M.plastic, 0, 0.0046, 0, 0.006));
+      g.add(roundBox(0.0472, 0.0062, 0.0792, M.lid, 0, 0.0119, 0, 0.0055));
+      g.add(roundBox(0.012, 0.0008, 0.005, M.glow(0x3b8cff), 0.0, 0.0151, -0.024, 0.0018));
+      for (const sx of [-1, 1]) for (let k = 0; k < 7; k++) g.add(box(0.0006, 0.0028, 0.0035, M.slot, sx * 0.0251, 0.0048, -0.024 + k * 0.006));
+      g.add(box(0.008, 0.0014, 0.0008, M.aluLight, 0.012, 0.004, -0.0411));
       target(g, mesh(new T.BoxGeometry(0.03, 0.017, 0.06), HIT, 0, 0.0075, 0.002), { kind: "fc", part: part.id, label: "비행 컨트롤러" });
       const d = arrowDecal(0.024, 0.032, "FC", "#1b1e22"); d.position.set(0, 0.0152, 0.006); g.add(d);
       // 포트마다 커넥터 하우징과 이름 인쇄, 하나씩 꽂을 수 있는 자리
@@ -243,7 +260,8 @@
         if (RAIL.includes(p)) continue;
         const v = FC_PORT[p], t = SIM.portType(p), side = Math.abs(v[0]) > 0.015 && p !== "USB";
         const len = t === "usb" ? 0.007 : (SIM.CONN_PINS[t] || 3) * 0.0012 + 0.002;
-        g.add(box(side ? 0.0035 : len, 0.0025, side ? len : 0.0035, M.plug, v[0], 0.0158, v[2]));
+        if (t === "usb") { g.add(roundBox(0.004, 0.0025, len, M.aluLight, v[0], v[1], v[2], 0.0008)); g.add(box(0.0042, 0.0012, len - 0.002, M.slot, v[0], v[1], v[2])); }
+        else { g.add(roundBox(side ? 0.0038 : len, 0.0028, side ? len : 0.0038, M.housing, v[0], 0.0158, v[2], 0.0006)); g.add(box(side ? 0.0018 : len - 0.0014, 0.0004, side ? len - 0.0014 : 0.0018, M.slot, v[0], 0.0173, v[2])); }
         o.ports = o.ports || []; o.ports.push(target(g, mesh(new T.BoxGeometry(side ? 0.006 : len + 0.002, 0.006, side ? len + 0.002 : 0.006), HIT, v[0], 0.016, v[2]), { kind: "fcPort", part: part.id, port: p, label: p }));
         if (p === "USB") continue;
         const lb = nameplate(p, 0.013, 0.0028, null, "#cfd6d4");
@@ -251,12 +269,13 @@
       }
       for (const p of RAIL) {
         const v = FC_PORT[p];
-        g.add(box(0.0028, 0.007, 0.004, M.plug, v[0], 0.0095, v[2]));
+        g.add(box(0.003, 0.0065, 0.0042, M.plastic, v[0], 0.0093, v[2]));
+        for (let k = 0; k < 3; k++) g.add(box(0.0005, 0.0026, 0.0005, M.pin, v[0], 0.0136, v[2] - 0.0012 + k * 0.0012)); // 금도금 핀 3개
         o.ports = o.ports || []; o.ports.push(target(g, mesh(new T.BoxGeometry(0.0034, 0.011, 0.008), HIT, v[0], 0.011, v[2]), { kind: "fcPort", part: part.id, port: p, label: p }));
         const lb = nameplate(SHORT(p), 0.0032, 0.0026, null, "#cfd6d4"); lb.position.set(v[0], 0.0153, 0.0385); g.add(lb);
       }
     } else if (part.type === "pm") {
-      g.add(roundBox(0.022, 0.009, 0.05, M.dark, 0, 0.0045, 0, 0.004));
+      g.add(roundBox(0.022, 0.009, 0.05, M.plastic, 0, 0.0045, 0, 0.004), roundBox(0.0225, 0.0094, 0.008, M.shrinkBlue, 0, 0.0045, 0.012, 0.004));
       const nl = nameplate("PMU", 0.018, 0.009, "#2a2e33", "#ffffff"); nl.position.set(0, 0.0093, -0.004); g.add(nl);
       g.add(box(0.016, 0.009, 0.012, M.yellow, 0, 0.0045, 0.03));
       target(g, mesh(new T.BoxGeometry(0.02, 0.014, 0.016), HIT, 0, 0.0045, 0.03), { kind: "pmIn", part: part.id, label: "PMU 입력 커넥터" });
@@ -267,23 +286,33 @@
       { const k2 = new T.CatmullRomCurve3([new T.Vector3(0.008, 0.005, -0.025), new T.Vector3(0.0095, 0.007, -0.036), new T.Vector3(0.0085, 0.005, -0.046)]); g.add(new T.Mesh(new T.TubeGeometry(k2, 8, 0.0018, 6), LEAD.k)); }
       g.add(box(0.008, 0.0055, 0.0075, M.yellow, 0.007, 0.005, -0.0505));
     } else if (part.type === "battery") {
-      g.add(roundBox(0.046, 0.034, 0.135, mat(0x2b62c4, { roughness: 0.35 }), 0, 0.017, 0, 0.007), roundBox(0.0468, 0.012, 0.1365, M.dark, 0, 0.017, 0, 0.007));
-      const nl = nameplate("배터리", 0.04, 0.016, null, "#ffffff"); nl.position.set(0, 0.0345, -0.02); g.add(nl);
+      // 리포 팩: 수축 포장 + 라벨 + 끝 보호판 + 밸런스 커넥터(흰 6S 단자와 가는 선) + 고정 스트랩
+      g.add(roundBox(0.046, 0.034, 0.135, new T.MeshPhysicalMaterial({ color: new T.Color(0x23282e), roughness: 0.3, clearcoat: 0.8, clearcoatRoughness: 0.2 }), 0, 0.017, 0, 0.007));
+      { const lt = canvasTex(256, 512, (c, W, H) => { const gr = c.createLinearGradient(0, 0, 0, H); gr.addColorStop(0, "#2a6fd6"); gr.addColorStop(1, "#163f86"); c.fillStyle = gr; c.fillRect(0, 0, W, H); c.fillStyle = "#ffd45e"; c.fillRect(0, H * 0.62, W, 10); c.fillStyle = "#fff"; c.textAlign = "center"; c.font = "bold 52px sans-serif"; c.fillText("LiPo 6S", W / 2, 120); c.font = "bold 40px sans-serif"; c.fillText("22.2V", W / 2, 200); c.fillText("16000mAh", W / 2, 260); c.font = "30px sans-serif"; c.fillText("25C", W / 2, 320); c.font = "bold 34px sans-serif"; c.fillText("배터리", W / 2, 420); });
+        const lb = new T.Mesh(new T.PlaneGeometry(0.038, 0.088), new T.MeshPhysicalMaterial({ map: lt, roughness: 0.35, clearcoat: 0.6 })); lb.rotation.x = -Math.PI / 2; lb.position.set(0, 0.0342, 0); g.add(lb); }
+      for (const z of [-0.0688, 0.0688]) g.add(roundBox(0.047, 0.035, 0.002, M.dark, 0, 0.017, z, 0.006));
+      for (const z of [-0.056, 0.056]) g.add(roundBox(0.049, 0.0362, 0.01, mat(0x161616, { roughness: 0.9 }), 0, 0.017, z, 0.007)); // 벨크로 스트랩
+      { const bc = new T.CatmullRomCurve3([new T.Vector3(-0.012, 0.03, 0.068), new T.Vector3(-0.015, 0.036, 0.078), new T.Vector3(-0.016, 0.036, 0.09)]); for (let k = 0; k < 4; k++) g.add(new T.Mesh(new T.TubeGeometry(bc.clone ? new T.CatmullRomCurve3(bc.points.map((pt) => pt.clone().add(new T.Vector3(k * 0.0012 - 0.0018, 0, 0)))) : bc, 10, 0.0005, 5), k ? mat(0x111111) : LEAD.r)); g.add(roundBox(0.008, 0.0035, 0.004, M.housing, -0.016, 0.036, 0.092, 0.0006)); }
       lead(o, "xt", [0.012, 0.026, 0.068], [0.012, 0.042, 0.084], LEAD.r, 0.0024, true);
     } else if (part.type === "gps") {
-      g.add(cyl(0.003, 0.07, M.carbon, 0, 0.035, 0, 8), cyl(0.012, 0.003, M.carbon, 0, 0.0015, 0), cyl(0.03, 0.012, M.dark, 0, 0.076, 0, 32));
-      const d = arrowDecal(0.03, 0.045, "GPS", "#1b1e22"); d.position.y = 0.0822; g.add(d);
+      // 접이식 마스트(카본 튜브 + 알루미늄 받침·접이 관절) + 돔형 GPS 퍽 + 상태 LED 링
+      const mastM = new T.MeshPhysicalMaterial({ color: 0xffffff, map: (() => { const t = carbonTex.clone(); t.repeat.set(1, 6); t.needsUpdate = true; return t; })(), roughness: 0.3, clearcoat: 1, clearcoatRoughness: 0.1 });
+      g.add(cyl(0.0032, 0.064, mastM, 0, 0.038, 0, 20));
+      g.add(lathe([[0, 0], [0.012, 0], [0.012, 0.002], [0.007, 0.0045], [0.0048, 0.008], [0, 0.008]], M.alu, 32));
+      g.add(roundBox(0.009, 0.008, 0.009, M.alu, 0, 0.026, 0, 0.002)); { const kp = cyl(0.0014, 0.011, M.steel, 0, 0.026, 0, 12); kp.rotation.z = Math.PI / 2; g.add(kp); }
+      g.add(lathe([[0, 0.068], [0.0065, 0.068], [0.0065, 0.071], [0, 0.071]], M.alu, 24));
+      g.add(lathe([[0, 0.07], [0.0295, 0.07], [0.0305, 0.0715], [0.0305, 0.075], [0.029, 0.0775], [0.024, 0.0805], [0.014, 0.0822], [0, 0.0826]], M.plastic, 64));
+      g.add(lathe([[0.0306, 0.0718], [0.0306, 0.0732]], M.glow(0x37d67a), 64));
+      const d = arrowDecal(0.026, 0.038, "GPS", "#1b1e22"); d.position.y = 0.0829; g.add(d);
       // 마스트 아래에서 양옆으로 나와 FC에 가리지 않는 케이블 끝 (굵은 6핀 / 가는 4핀)
       lead(o, "gps", [0.003, 0.006, 0.0], [0.036, 0.004, -0.006], LEAD.l, 0.0013, true);
       lead(o, "compass", [-0.003, 0.006, 0.0], [-0.036, 0.004, -0.006], LEAD.v, 0.0011, true);
     } else if (part.type === "rx") {
-      g.add(roundBox(0.024, 0.01, 0.04, mat(0x3a3f45, { roughness: 0.5 }), 0, 0.005, 0, 0.004), box(0.02, 0.0006, 0.012, M.white, 0, 0.0104, 0));
-      const a1 = cyl(0.0008, 0.07, M.dark, -0.006, 0.03, 0.022, 6); a1.rotation.x = 0.5;
-      const a2 = cyl(0.0008, 0.07, M.dark, 0.006, 0.03, 0.022, 6); a2.rotation.x = 0.5; a2.rotation.z = -0.5;
-      g.add(a1, a2);
+      g.add(roundBox(0.024, 0.01, 0.04, new T.MeshPhysicalMaterial({ color: new T.Color(0x34393f), roughness: 0.42, clearcoat: 0.4 }), 0, 0.005, 0, 0.004), roundBox(0.02, 0.0006, 0.014, M.white, 0, 0.0102, 0.004, 0.0015));
+      for (const [x, rz] of [[-0.006, 0], [0.006, -0.5]]) { const ag = new T.Group(); ag.position.set(x, 0.006, 0.02); ag.rotation.set(0.5, 0, rz); ag.add(cyl(0.0008, 0.052, mat(0x111111, { roughness: 0.6 }), 0, 0.026, 0, 8), cyl(0.0012, 0.018, M.white, 0, 0.061, 0, 10), cyl(0.0014, 0.004, M.rubber, 0, 0.002, 0, 10)); g.add(ag); } // 동축 안테나 + 흰 수신부
       const nl = nameplate("R8 수신기", 0.022, 0.007, null, "#ffffff"); nl.position.set(0, 0.0102, 0.004); g.add(nl);
       // 핀 헤더: 채널 1–8, SBUS (뒤쪽 끝)
-      RX_COLS.forEach((c, i) => { const x = rxColX(i); g.add(box(0.0022, 0.004, 0.003, M.dark, x, 0.012, -0.0175)); const lb = nameplate(c === "SB" ? "B" : c, 0.0024, 0.0024, null, "#ffffff"); lb.position.set(x, 0.0104, -0.0135); g.add(lb); });
+      RX_COLS.forEach((c, i) => { const x = rxColX(i); g.add(box(0.0022, 0.004, 0.003, M.plastic, x, 0.012, -0.0175)); for (let k = 0; k < 3; k++) g.add(box(0.0004, 0.0018, 0.0004, M.pin, x, 0.0148, -0.0185 + k * 0.001)); const lb = nameplate(c === "SB" ? "B" : c, 0.0024, 0.0024, null, "#ffffff"); lb.position.set(x, 0.0104, -0.0135); g.add(lb); });
       // 바인딩 버튼과 상태 LED
       g.add(cyl(0.0042, 0.0012, M.dark, 0.0075, 0.0106, -0.004, 20)); // 버튼 받침
       o.bindBtn = cyl(0.0033, 0.0022, mat(0xd8382e, { roughness: 0.35 }), 0.0075, 0.0118, -0.004, 20); g.add(o.bindBtn); // 바인드 버튼
@@ -297,15 +326,17 @@
       const hh = new T.Mesh(new T.SphereGeometry(0.0065, 8, 6), HIT); hh.position.set(0, 0.004, -0.04); hh.userData.tip = { part: part.id, key: "sig" }; g.add(hh);
       o.tips.sig = new T.Vector3(0, 0.004, -0.04);
     } else if (part.type === "buzzer") {
-      g.add(cyl(0.008, 0.007, M.dark, 0, 0.0035, 0), cyl(0.002, 0.0005, M.steel, 0, 0.0072, 0, 8));
+      g.add(lathe([[0, 0], [0.008, 0], [0.008, 0.0062], [0.0072, 0.0072], [0.0024, 0.0074], [0.0018, 0.0062], [0, 0.0062]], M.plastic, 40));
       const nl = nameplate("부저", 0.012, 0.005, null, "#ffffff"); nl.position.set(0, 0.0071, 0.0045); g.add(nl);
       lead(o, "fc", [0, 0.003, -0.008], [0, 0.003, -0.018], LEAD.k, 0.0008, true);
     } else if (part.type === "switch") {
-      g.add(box(0.014, 0.008, 0.014, M.dark, 0, 0.004, 0), cyl(0.0045, 0.004, M.red, 0, 0.01, 0, 16));
+      g.add(roundBox(0.014, 0.008, 0.014, M.plastic, 0, 0.004, 0, 0.0025), lathe([[0.0052, 0.0078], [0.0058, 0.0084], [0.0058, 0.0092], [0.005, 0.0096]], M.glow(0xff4630), 32), lathe([[0, 0.0084], [0.0046, 0.0084], [0.0046, 0.0112], [0.0038, 0.012], [0, 0.0121]], new T.MeshPhysicalMaterial({ color: new T.Color(0xc8382e), roughness: 0.3, clearcoat: 0.8 }), 32));
       const nl = nameplate("안전 스위치", 0.014, 0.0035, null, "#ffffff"); nl.position.set(0, 0.0081, 0.0055); g.add(nl);
       lead(o, "fc", [0, 0.003, -0.007], [0, 0.003, -0.018], LEAD.r, 0.0008, true);
     } else if (part.type === "telem") {
-      g.add(roundBox(0.024, 0.01, 0.046, M.green, 0, 0.005, 0, 0.004), cyl(0.003, 0.075, M.dark, 0, 0.045, 0.02, 8));
+      g.add(roundBox(0.024, 0.01, 0.046, new T.MeshPhysicalMaterial({ color: new T.Color(0x2f8a54), roughness: 0.4, clearcoat: 0.5 }), 0, 0.005, 0, 0.004));
+      g.add(lathe([[0, 0.008], [0.0034, 0.008], [0.0034, 0.0125], [0.0026, 0.0135], [0, 0.0135]], M.aluLight, 6).translateZ(0.02)); // SMA 커넥터(육각)
+      g.add(lathe([[0, 0.013], [0.0036, 0.014], [0.004, 0.03], [0.0034, 0.07], [0.0026, 0.082], [0, 0.0835]], M.rubber, 24).translateZ(0.02)); // 고무 안테나
       const nl = nameplate("텔레메트리", 0.02, 0.006, null, "#ffffff"); nl.position.set(0, 0.0102, -0.006); g.add(nl);
       lead(o, "fc", [0, 0.005, -0.023], [0, 0.004, -0.034], LEAD.y, 0.0009, true);
     }
