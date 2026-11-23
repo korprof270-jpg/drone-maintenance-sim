@@ -372,12 +372,28 @@
   // XT60F 위치: 붐대 양옆 (i=0 → 오른쪽 옆, 1 → 왼쪽 옆)
   const xtRoot = (pid, i) => { const [dx, dz] = armDir(pid), s = i ? 1 : -1; return new T.Vector3(dx * 0.066 - dz * 0.03 * s, 0.002, dz * 0.066 + dx * 0.03 * s); };
   const xtLocal = (pid, i) => { const [dx, dz] = armDir(pid), s = i ? 1 : -1; return new T.Vector3(dx * 0.1 - dz * 0.034 * s, 0.004, dz * 0.1 + dx * 0.034 * s); };
+  // CNC 가공 카본 판: 둥근 모서리 사각형 + 경량화 구멍·나사 구멍, 3mm 두께, 모서리 면취
+  const cfTex = (rep) => { const t = carbonTex.clone(); t.repeat.set(rep, rep); t.needsUpdate = true; return t; };
+  M.cfPlate = new T.MeshPhysicalMaterial({ color: 0xffffff, map: cfTex(34), normalMap: normalFrom(weaveH, 2.2, new T.Vector2(34, 34)), normalScale: new T.Vector2(0.35, 0.35), roughness: 0.36, metalness: 0.1, clearcoat: 1, clearcoatRoughness: 0.1 });
+  function cfPlate(w, d, holes, m, t) {
+    t = t || 0.003; const r = 0.016, sh = new T.Shape(), W = w / 2, D = d / 2;
+    sh.moveTo(-W + r, -D); sh.lineTo(W - r, -D); sh.quadraticCurveTo(W, -D, W, -D + r); sh.lineTo(W, D - r); sh.quadraticCurveTo(W, D, W - r, D); sh.lineTo(-W + r, D); sh.quadraticCurveTo(-W, D, -W, D - r); sh.lineTo(-W, -D + r); sh.quadraticCurveTo(-W, -D, -W + r, -D);
+    for (const h of holes || []) { const p2 = new T.Path(); if (h.length === 3) p2.absarc(h[0], -h[1], h[2], 0, Math.PI * 2, true); else { const [x, z, hw, hd] = h, rr = Math.min(hw, hd); p2.moveTo(x - hw + rr, -z - hd); p2.lineTo(x + hw - rr, -z - hd); p2.absarc(x + hw - rr, -z - hd + rr, rr, -Math.PI / 2, 0, false); p2.lineTo(x + hw, -z + hd - rr); p2.absarc(x + hw - rr, -z + hd - rr, rr, 0, Math.PI / 2, false); p2.lineTo(x - hw + rr, -z + hd); p2.absarc(x - hw + rr, -z + hd - rr, rr, Math.PI / 2, Math.PI, false); p2.lineTo(x - hw, -z - hd + rr); p2.absarc(x - hw + rr, -z - hd + rr, rr, Math.PI, Math.PI * 1.5, false); } sh.holes.push(p2); }
+    const b = 0.0004, geo = new T.ExtrudeGeometry(sh, { depth: t - 2 * b, bevelEnabled: true, bevelThickness: b, bevelSize: b, bevelSegments: 2, curveSegments: 16 });
+    geo.rotateX(-Math.PI / 2); geo.translate(0, -t / 2 + b, 0);
+    return mesh(geo, m || M.cfPlate, 0, 0, 0);
+  }
+  // 알루미늄 육각 스탠드오프 + 위아래 나사 머리
+  function standoff(g, x, y0, y1, z) { const h = y1 - y0; g.add(cyl(0.0032, h, M.aluLight, x, (y0 + y1) / 2, z, 6)); for (const y of [y0 - 0.0018, y1 + 0.0018]) { g.add(cyl(0.0026, 0.0016, M.dark, x, y, z, 20)); } }
   const octPlate = (w, d, m) => { const p = mesh(new T.CylinderGeometry(0.5, 0.5, 0.003, 4), m || M.carbon, 0, 0, 0); p.scale.set(w * 1.5, 1, d * 1.5); p.rotation.y = Math.PI / 4; return p; };
   // 하판: 카본 판 + PDB(구리 패드, +/− 인쇄) + 통신선 하네스 + 스탠드오프
   function buildBottom(o) {
     const g = o.group;
-    const pl = octPlate(0.22, 0.22); pl.position.y = -0.0015; pl.userData.plate = true; g.add(pl);
-    const pcb = mesh(new T.CylinderGeometry(0.5, 0.5, 0.0006, 4), mat(0x143d2c, { roughness: 0.5 }), 0, 0.0004, 0); pcb.scale.set(0.2 * 1.45, 1, 0.2 * 1.45); pcb.rotation.y = Math.PI / 4; pcb.castShadow = false; pcb.userData.plate = true; g.add(pcb);
+    const BH = []; for (const sx of [-1, 1]) for (const sz of [-1, 1]) BH.push([sx * 0.108, sz * 0.108, 0.0022], [sx * 0.108, sz * 0.03, 0.0018]);
+    const pl = cfPlate(0.233, 0.233, BH); pl.position.y = -0.0015; pl.userData.plate = true; g.add(pl);
+    const pcb = cfPlate(0.205, 0.205, [], new T.MeshPhysicalMaterial({ color: new T.Color(0x0f4a32), roughness: 0.35, metalness: 0.1, clearcoat: 0.8, clearcoatRoughness: 0.2 }), 0.0012); pcb.position.y = 0.0006; pcb.castShadow = false; pcb.userData.plate = true; g.add(pcb);
+    { const tr = canvasTex(512, 512, (c, W, H) => { c.clearRect(0, 0, W, H); c.strokeStyle = "rgba(210,150,60,0.55)"; c.lineCap = "round"; for (let i = 0; i < 26; i++) { c.lineWidth = 3 + (i % 3) * 3; c.beginPath(); let x = Math.random() * W, y = Math.random() * H; c.moveTo(x, y); for (let k = 0; k < 3; k++) { if (k % 2) x += (Math.random() - 0.5) * 220; else y += (Math.random() - 0.5) * 220; c.lineTo(x, y); } c.stroke(); } c.strokeStyle = "rgba(255,255,255,0.8)"; c.lineWidth = 4; c.strokeRect(14, 14, W - 28, H - 28); });
+      const tp = new T.Mesh(new T.PlaneGeometry(0.2, 0.2), new T.MeshStandardMaterial({ map: tr, transparent: true, roughness: 0.6, metalness: 0, depthWrite: false })); tp.rotation.x = -Math.PI / 2; tp.position.y = 0.00125; tp.raycast = () => {}; g.add(tp); } // 구리 배선 패턴·실크 테두리
     const silk = (ch) => { const p = new T.Mesh(new T.PlaneGeometry(0.011, 0.011), new T.MeshBasicMaterial({ map: canvasTex(64, 64, (c) => { c.fillStyle = "#143d2c"; c.fillRect(0, 0, 64, 64); c.fillStyle = "#fff"; c.font = "bold 58px sans-serif"; c.textAlign = "center"; c.textBaseline = "middle"; c.fillText(ch, 32, 34); }) })); p.rotation.x = -Math.PI / 2; return p; };
     // XT60F 8개 (붐대 양옆, 짧은 빨강·검정 선 끝)
     SIM.POS_IDS.forEach((pid) => SIM.XT_OF[pid].forEach((xt, i) => {
@@ -406,41 +422,59 @@
     const ho = { group: hb, id: o.id, tips: {}, pads: {} };
     lead(ho, "harness", [0, 0.004, -0.006], [0.004, 0.006, -0.022], LEAD.o, 0.0009, true);
     o.tips.harness = ho.tips.harness.clone().add(new T.Vector3(...HARNESS));
-    for (const sx of [-1, 1]) for (const sz of [-1, 1]) g.add(cyl(0.003, 0.038, M.steel, sx * 0.06, 0.018, sz * 0.078, 8));
+    for (const sx of [-1, 1]) for (const sz of [-1, 1]) standoff(g, sx * 0.06, 0.0012, 0.0365, sz * 0.078);
   }
   function buildTop(o) {
-    const pl = octPlate(0.215, 0.24, M.carbon.clone()); pl.material.transparent = true; pl.userData.plate = true; o.group.add(pl); sc.topPlate = pl;
-    o.group.add(cyl(0.006, 0.003, M.carbon, 0, 0.003, 0.09)); // 마스트 받침
+    const TH = [[0, -0.108, 0.034, 0.006], [-0.105, 0.012, 0.005, 0.03], [0.105, 0.012, 0.005, 0.03], [-0.036, 0.112, 0.016, 0.005], [0.036, 0.112, 0.016, 0.005]];
+    for (const sx of [-1, 1]) for (const sz of [-1, 1]) TH.push([sx * 0.06, sz * 0.078, 0.0017], [sx * 0.1, sz * 0.112, 0.0022]);
+    const pl = cfPlate(0.228, 0.254, TH, M.cfPlate.clone()); pl.material.transparent = true; pl.userData.plate = true; o.group.add(pl); sc.topPlate = pl;
+    o.group.add(lathe([[0.0075, 0.0015], [0.0075, 0.0035], [0.0062, 0.0048], [0.0034, 0.0048], [0.0034, 0.0015]], M.aluLight, 32).translateZ(0.09)); // 마스트 받침(알루미늄 소켓)
     const fr = arrowDecal(0.016, 0.022, "", "#22262a"); fr.position.set(0, 0.0016, -0.1); o.group.add(fr);
   }
   // 붐대: 가운데가 원점, 바깥쪽 = +z (끝에 모터 마운트)
   // 붐대: 원통 카본 붐대(가운데가 원점, 바깥 = +z), 몸체 쪽 접이 관절, 끝에 모터 마운트와 분사 노즐
   function buildArm(o, part) {
-    const g = o.group, tubeM = mat(0x1d2024, { roughness: 0.4 });
-    const t = cyl(0.012, 0.2, tubeM, 0, -0.002, 0, 20); t.rotation.x = Math.PI / 2; g.add(t);
-    const band = cyl(0.0128, 0.024, part.color === "red" ? M.red : M.white, 0, -0.002, 0.055, 20); band.rotation.x = Math.PI / 2; g.add(band); // 앞(빨강)·뒤(흰색) 표시 띠
-    g.add(box(0.034, 0.03, 0.03, M.dark, 0, -0.002, -0.07)); // 접이 관절
-    const pin = cyl(0.004, 0.04, M.steel, 0, -0.002, -0.07, 10); pin.rotation.z = Math.PI / 2; g.add(pin);
-    g.add(box(0.036, 0.026, 0.02, M.dark, 0, -0.002, -0.093)); // 몸체 클램프
-    g.add(box(0.05, 0.006, 0.05, M.dark, 0, 0.007, ARM_R - 0.14)); // 모터 마운트
-    g.add(box(0.03, 0.026, 0.03, M.dark, 0, -0.008, ARM_R - 0.14));
-    const nz = new T.Mesh(new T.ConeGeometry(0.006, 0.014, 12), mat(0xd8dde0)); nz.rotation.x = Math.PI; nz.position.set(0, -0.03, ARM_R - 0.14); g.add(nz); // 분사 노즐
-    g.add(cyl(0.004, 0.012, M.dark, 0, -0.02, ARM_R - 0.14, 10));
+    const g = o.group, alongZ = (m3) => { m3.rotation.x = Math.PI / 2; return m3; }, MZ = ARM_R - 0.14;
+    const tubeM = new T.MeshPhysicalMaterial({ color: 0xffffff, map: (() => { const t = carbonTex.clone(); t.repeat.set(2, 10); t.needsUpdate = true; return t; })(), roughness: 0.32, metalness: 0.1, clearcoat: 1, clearcoatRoughness: 0.1 });
+    g.add(alongZ(cyl(0.012, 0.2, tubeM, 0, -0.002, 0, 32)));
+    g.add(alongZ(cyl(0.0126, 0.024, part.color === "red" ? M.red : M.white, 0, -0.002, 0.04, 32))); // 앞(빨강)·뒤(흰색) 표시 띠
+    // 접이 관절: 양쪽 튜브 클램프 + 경첩 몸체 + 피벗 볼트 + 잠금 슬리브
+    for (const z of [-0.084, -0.056]) g.add(alongZ(cyl(0.0151, 0.012, M.alu, 0, -0.002, z, 40)));
+    g.add(roundBox(0.03, 0.03, 0.03, M.alu, 0, -0.002, -0.07, 0.006));
+    { const pv = cyl(0.0035, 0.038, M.steel, 0, -0.002, -0.07, 16); pv.rotation.z = Math.PI / 2; g.add(pv); for (const x of [-0.0195, 0.0195]) { const hd = cyl(0.0052, 0.003, M.dark, x, -0.002, -0.07, 6); hd.rotation.z = Math.PI / 2; g.add(hd); } }
+    g.add(alongZ(cyl(0.0158, 0.014, M.accent, 0, -0.002, -0.045, 40))); // 잠금 슬리브
+    for (let k = 0; k < 18; k++) { const a = (k / 18) * Math.PI * 2, rb = box(0.0012, 0.0012, 0.013, M.accent, Math.cos(a) * 0.0161, -0.002 + Math.sin(a) * 0.0161, -0.045); rb.rotation.z = a; g.add(rb); } // 미끄럼 방지 홈
+    // 몸체 클램프 + 소켓 볼트
+    g.add(roundBox(0.036, 0.028, 0.02, M.alu, 0, -0.002, -0.093, 0.005));
+    for (const x of [-0.011, 0.011]) { g.add(cyl(0.0026, 0.0018, M.steel, x, 0.0129, -0.093, 20)); g.add(cyl(0.0012, 0.0008, M.dark, x, 0.0139, -0.093, 6)); }
+    // 모터 마운트: 튜브 클램프 + 둥근 사각 장착판(구멍 4개)
+    g.add(alongZ(cyl(0.0152, 0.032, M.alu, 0, -0.002, MZ, 40)));
+    g.add(roundBox(0.03, 0.012, 0.03, M.alu, 0, 0.002, MZ, 0.004));
+    g.add(roundBox(0.052, 0.006, 0.052, M.alu, 0, 0.007, MZ, 0.01));
+    for (const sx of [-1, 1]) for (const sz of [-1, 1]) g.add(cyl(0.0019, 0.0062, M.core, sx * 0.0175, 0.0071, MZ + sz * 0.0175, 16));
+    for (const x of [-0.0166, 0.0166]) { const b2 = cyl(0.0024, 0.006, M.steel, x, -0.004, MZ, 6); b2.rotation.z = Math.PI / 2; g.add(b2); } // 클램프 조임 볼트
+    // 분사 노즐: 배관 + 노즐 몸체(육각) + 분사 팁, 붐대 아래로 지나는 호스
+    g.add(cyl(0.0032, 0.016, M.aluLight, 0, -0.022, MZ, 16));
+    g.add(cyl(0.0058, 0.006, M.dark, 0, -0.032, MZ, 6));
+    g.add(lathe([[0.0046, 0], [0.0046, -0.002], [0.0028, -0.007], [0.0012, -0.009], [0, -0.009]], mat(0xd8dde0, { roughness: 0.3 }), 24).translateY(-0.035).translateZ(MZ));
+    { const hc = new T.CatmullRomCurve3([new T.Vector3(0, -0.017, -0.06), new T.Vector3(0, -0.018, 0.02), new T.Vector3(0, -0.02, MZ - 0.014), new T.Vector3(0, -0.026, MZ - 0.004)]); g.add(new T.Mesh(new T.TubeGeometry(hc, 24, 0.0024, 10), mat(0x22252a, { roughness: 0.6 }))); }
   }
   // 스키드: 앞뒤로 긴 원통 레일 2개, 하판에 물리는 가로대 2개, 바깥으로 벌어진 굽은 다리 4개
   function buildSkid(o) {
     const g = o.group, r = 0.0065, RY = -(LEG - 0.0015 - 0.0065), RX = 0.13;
-    const tubeAlong = (pts, rr) => { const c = new T.CatmullRomCurve3(pts.map((p) => new T.Vector3(...p))); const m = new T.Mesh(new T.TubeGeometry(c, 32, rr, 12), M.carbon); m.castShadow = true; return m; };
+    const skM = new T.MeshPhysicalMaterial({ color: 0xffffff, map: (() => { const t = carbonTex.clone(); t.repeat.set(10, 1); t.needsUpdate = true; return t; })(), roughness: 0.32, metalness: 0.1, clearcoat: 1, clearcoatRoughness: 0.1 });
+    const tubeAlong = (pts, rr) => { const c = new T.CatmullRomCurve3(pts.map((p) => new T.Vector3(...p))); const m = new T.Mesh(new T.TubeGeometry(c, 40, rr, 20), skM); m.castShadow = m.receiveShadow = true; return m; };
+    const rubber = mat(0x1a1a1a, { roughness: 0.85 });
     for (const sx of [-1, 1]) {
       g.add(tubeAlong([[sx * RX, RY, -0.18], [sx * RX, RY, 0.18]], r)); // 착지 레일
-      for (const sz of [-1, 1]) { const cap = new T.Mesh(new T.SphereGeometry(r, 10, 8), M.dark); cap.position.set(sx * RX, RY, sz * 0.18); g.add(cap); }
+      for (const sz of [-1, 1]) { const cap = lathe([[0, 0], [r + 0.0012, 0], [r + 0.0014, 0.012], [r + 0.0006, 0.017], [0.003, 0.0195], [0, 0.02]], rubber, 24); cap.rotation.x = sz * Math.PI / 2; cap.position.set(sx * RX, RY, sz * 0.175); g.add(cap); } // 고무 발
       for (const sz of [-1, 1]) g.add(tubeAlong([[sx * 0.064, -0.006, sz * 0.1], [sx * 0.08, -0.04, sz * 0.1], [sx * 0.112, -0.085, sz * 0.1], [sx * RX, RY, sz * 0.1]], 0.0055)); // 다리
-      for (const sz of [-1, 1]) g.add(box(0.018, 0.012, 0.016, M.dark, sx * RX, RY + 0.005, sz * 0.1));
+      for (const sz of [-1, 1]) { const cp = cyl(0.0092, 0.022, M.alu, sx * RX, RY, sz * 0.1, 32); cp.rotation.x = Math.PI / 2; g.add(cp, cyl(0.0078, 0.014, M.alu, sx * RX, RY + 0.009, sz * 0.1, 32)); const bt = cyl(0.0022, 0.022, M.steel, sx * RX, RY, sz * 0.1 + 0.008, 6); bt.rotation.z = Math.PI / 2; g.add(bt); } // T자 알루미늄 이음
       g.add(tubeAlong([[sx * 0.1, -0.06, -0.1], [sx * 0.1, -0.06, 0.1]], 0.004)); // 다리 사이 보강대
     }
     for (const sz of [-1, 1]) {
       g.add(tubeAlong([[-0.08, -0.006, sz * 0.1], [0.08, -0.006, sz * 0.1]], 0.0055));
-      for (const sx of [-1, 1]) g.add(box(0.016, 0.009, 0.018, M.dark, sx * 0.045, -0.003, sz * 0.1));
+      for (const sx of [-1, 1]) { g.add(roundBox(0.018, 0.011, 0.02, M.alu, sx * 0.045, -0.004, sz * 0.1, 0.003)); g.add(cyl(0.0022, 0.0014, M.steel, sx * 0.045, 0.0013, sz * 0.1, 16)); } // 하판 고정 클램프
     }
   }
 
@@ -452,6 +486,9 @@
     const stripe = new T.Mesh(new T.TorusGeometry(0.5, 0.012, 8, 64), mat(0xc8382e, { roughness: 0.35 })); stripe.rotation.x = Math.PI / 2; stripe.scale.set(0.212, 0.262, 1); stripe.position.y = 0.006; g.add(stripe);
     const vis = new T.Mesh(new T.SphereGeometry(0.5, 32, 12, -0.6, 1.2, 0.95, 0.45), mat(0x15181b, { roughness: 0.15, metalness: 0.4 })); vis.scale.set(0.215, 0.097, 0.265); vis.rotation.y = Math.PI; g.add(vis); // 앞쪽 검은 창
     g.add(cyl(0.012, 0.004, M.dark, 0, 0.046, 0.09, 24)); // GPS 마스트 구멍 링
+    // 뒤쪽 냉각 통풍구(돔 표면을 따라 놓은 검은 슬릿)와 고정 노브
+    for (let k = -3; k <= 3; k++) { const a = 0.55 + Math.abs(k) * 0.02, th = (k * 0.09), y = Math.cos(a) * 0.0475, rr = Math.sin(a) * 0.5; const sl = roundBox(0.0035, 0.0012, 0.022, mat(0x0d0f11, { roughness: 0.6 }), Math.sin(th) * rr * 0.21, y + 0.0004, Math.cos(th) * rr * 0.26, 0.0012); sl.rotation.y = th; sl.rotation.x = -a * 0.9; g.add(sl); }
+    for (const sx of [-1, 1]) { g.add(cyl(0.006, 0.004, M.dark, sx * 0.098, 0.008, 0, 24)); g.add(cyl(0.0035, 0.0022, M.aluLight, sx * 0.098, 0.011, 0, 24)); }
   }
 
   // ---------- 장착 자리 (기체 기준 위치·방향) ----------
