@@ -762,6 +762,10 @@ const BIND_MSG = { held: "바인드 버튼을 누르고 있습니다. 이 상태
       g.fillStyle = "#1d6b55"; g.fillRect(0, 0, W, H);
       for (let i = 0; i <= 36; i++) { g.strokeStyle = i % 5 ? "rgba(255,255,255,0.14)" : "rgba(255,255,255,0.34)"; g.lineWidth = i % 5 ? 1 : 2; g.beginPath(); g.moveTo((i * W) / 36, 0); g.lineTo((i * W) / 36, H); g.stroke(); }
       for (let i = 0; i <= 22; i++) { g.strokeStyle = i % 5 ? "rgba(255,255,255,0.14)" : "rgba(255,255,255,0.34)"; g.lineWidth = i % 5 ? 1 : 2; g.beginPath(); g.moveTo(0, (i * H) / 22); g.lineTo(W, (i * H) / 22); g.stroke(); }
+      g.fillStyle = "rgba(255,255,255,0.55)"; g.font = "bold 13px sans-serif"; g.textAlign = "center";
+      for (let i = 5; i < 36; i += 5) { g.fillText(String(i), (i * W) / 36, 16); g.fillText(String(i), (i * W) / 36, H - 6); }
+      g.textAlign = "left"; for (let i = 5; i < 22; i += 5) g.fillText(String(i), 5, (i * H) / 22 - 4);
+      g.strokeStyle = "rgba(255,255,255,0.18)"; g.lineWidth = 1.5; g.setLineDash([6, 6]); g.beginPath(); g.moveTo(0, H); g.lineTo(H, 0); g.moveTo(W - H, 0); g.lineTo(W, H); g.stroke(); g.setLineDash([]);
     });
     const pad = mesh(new T.BoxGeometry(3.4 * KS, 0.004, 2.4 * KS), new T.MeshStandardMaterial({ map: matTex, roughness: 0.85 }), 0, -0.002, 0); pad.castShadow = false;
     benchGroup.add(top, pad);
@@ -848,21 +852,48 @@ const BIND_MSG = { held: "바인드 버튼을 누르고 있습니다. 이 상태
     });
   }
   // ---------- 조종기 (TX12 형태) ----------
+  // 조종기(게임패드형 송신기): 둥근 셸 + 그립, LCD 베젤, 짐벌(먼지 덮개·널링 스틱), 토글 스위치, 버튼, 접이 손잡이·안테나
   function buildTx() {
     const g = new T.Group(); g.position.set(-0.4, 0, 0.24); g.rotation.y = 0.25; g.userData.tool = true; partsRoot.add(g);
-    const body = mat(0x2a2d31, { roughness: 0.55 }), dark = mat(0x16181a);
-    g.add(box(0.17, 0.03, 0.085, body, 0, 0.022, 0)); // 몸체
-    for (const sx of [-1, 1]) { const grip = box(0.04, 0.034, 0.05, body, sx * 0.07, 0.017, 0.045); grip.rotation.x = 0.25; g.add(grip); }
-    const handle = new T.Mesh(new T.TorusGeometry(0.03, 0.006, 8, 20, Math.PI), dark); handle.position.set(0, 0.038, -0.05); g.add(handle);
-    g.add(box(0.06, 0.002, 0.034, mat(0x8fa39a, { roughness: 0.3 }), 0, 0.0375, -0.012)); // LCD
-    const lb = nameplate("TX12", 0.022, 0.007, null, "#e8ecec"); lb.position.set(0, 0.0376, 0.016); g.add(lb);
-    for (const sx of [-1, 1]) { // 짐벌과 스틱
-      g.add(cyl(0.019, 0.003, dark, sx * 0.058, 0.0385, 0.012, 24));
-      const st = cyl(0.0028, 0.03, M.steel, sx * 0.058, 0.053, 0.012, 10); g.add(st); g.add(cyl(0.006, 0.006, dark, sx * 0.058, 0.068, 0.012, 12));
-      for (const k of [0, 1]) g.add(cyl(0.0022, 0.012, M.steel, sx * (0.04 + k * 0.03), 0.043, -0.04, 8)); // 스위치
+    const shellM = new T.MeshPhysicalMaterial({ color: new T.Color(0x2b2e33), roughness: 0.5, clearcoat: 0.25, clearcoatRoughness: 0.5 });
+    const gripM = new T.MeshStandardMaterial({ color: new T.Color(0x1a1b1d), roughness: 0.9 });
+    // 위에서 본 외곽선 (앞 = -z, 사람 쪽 = +z 그립)
+    const sh = new T.Shape();
+    sh.moveTo(-0.07, -0.042); sh.quadraticCurveTo(0, -0.05, 0.07, -0.042); sh.quadraticCurveTo(0.09, -0.04, 0.092, -0.012);
+    sh.bezierCurveTo(0.095, 0.03, 0.1, 0.075, 0.075, 0.082); sh.quadraticCurveTo(0.055, 0.086, 0.048, 0.06);
+    sh.quadraticCurveTo(0.04, 0.035, 0, 0.034); sh.quadraticCurveTo(-0.04, 0.035, -0.048, 0.06); sh.quadraticCurveTo(-0.055, 0.086, -0.075, 0.082);
+    sh.bezierCurveTo(-0.1, 0.075, -0.095, 0.03, -0.092, -0.012); sh.quadraticCurveTo(-0.09, -0.04, -0.07, -0.042);
+    const bodyG = new T.ExtrudeGeometry(sh, { depth: 0.022, bevelEnabled: true, bevelThickness: 0.006, bevelSize: 0.006, bevelSegments: 5, curveSegments: 24 });
+    bodyG.rotateX(Math.PI / 2); bodyG.translate(0, 0.034, 0); // 윗면 y≈0.04, 아랫면 y≈0.006
+    const body = new T.Mesh(bodyG, shellM); body.castShadow = body.receiveShadow = true; g.add(body);
+    for (const sx of [-1, 1]) { const gp = roundBox(0.03, 0.026, 0.04, gripM, sx * 0.074, 0.018, 0.058, 0.01); gp.rotation.x = 0.15; g.add(gp); } // 고무 그립
+    // LCD: 유광 베젤 + 화면(글자)
+    g.add(roundBox(0.066, 0.003, 0.04, new T.MeshPhysicalMaterial({ color: 0x0c0d0f, roughness: 0.15, clearcoat: 1 }), 0, 0.0405, -0.014, 0.004));
+    const lcd = canvasTex(256, 150, (c, W, H) => { c.fillStyle = "#9fb3a6"; c.fillRect(0, 0, W, H); c.fillStyle = "#1d2a22"; c.font = "bold 22px monospace"; c.fillText("QUAD", 12, 30); c.fillText("7.6V", W - 70, 30); c.fillRect(0, 40, W, 2); c.font = "bold 46px monospace"; c.fillText("MODEL", 50, 98); c.font = "18px monospace"; c.fillText("TMR 00:00", 12, 136); c.fillText("RSSI --", W - 92, 136); });
+    const scr = new T.Mesh(new T.PlaneGeometry(0.056, 0.032), new T.MeshStandardMaterial({ map: lcd, roughness: 0.25, emissive: 0x222b25, emissiveMap: lcd, emissiveIntensity: 0.6 })); scr.rotation.x = -Math.PI / 2; scr.position.set(0, 0.0422, -0.014); g.add(scr);
+    // 버튼: SYS·MDL·TEL(왼쪽), PAGE·RTN(오른쪽), 가운데 전원
+    const btnM = new T.MeshPhysicalMaterial({ color: 0x18191b, roughness: 0.4, clearcoat: 0.6 });
+    for (const [x, z] of [[-0.044, -0.03], [-0.044, -0.021], [-0.044, -0.012], [0.044, -0.03], [0.044, -0.021]]) g.add(lathe([[0, 0], [0.0032, 0], [0.0032, 0.0012], [0.0026, 0.0018], [0, 0.0019]], btnM, 20).translateX(x).translateY(0.04).translateZ(z));
+    g.add(lathe([[0, 0], [0.0042, 0], [0.0042, 0.0012], [0.0034, 0.002], [0, 0.0021]], btnM, 24).translateX(0.044).translateY(0.04).translateZ(-0.009)); // ENT 휠
+    g.add(lathe([[0, 0], [0.004, 0], [0.004, 0.0014], [0, 0.0016]], M.glow(0x3c7cff), 24).translateY(0.04).translateZ(0.012)); // 전원 버튼(LED)
+    // 짐벌: 둥근 홈 + 고무 먼지 덮개 + 스틱 + 널링 끝, 옆 트림 버튼
+    for (const sx of [-1, 1]) {
+      const gx = sx * 0.058, gz = 0.016;
+      g.add(lathe([[0.0205, 0.039], [0.0215, 0.0405], [0.019, 0.0402], [0.017, 0.038]], M.plastic, 40).translateX(gx).translateZ(gz));
+      g.add(lathe([[0, 0.0395], [0.0168, 0.0385], [0.016, 0.0402], [0.012, 0.0428], [0.006, 0.0446], [0.003, 0.0452], [0, 0.0452]], M.rubber, 40).translateX(gx).translateZ(gz));
+      g.add(cyl(0.0024, 0.024, M.steel, gx, 0.056, gz, 16));
+      g.add(lathe([[0, 0.066], [0.0055, 0.066], [0.0062, 0.068], [0.0062, 0.074], [0.0055, 0.0755], [0, 0.0758]], M.aluLight, 24).translateX(gx).translateZ(gz));
+      for (let k = 0; k < 16; k++) { const a = (k / 16) * Math.PI * 2, r2 = box(0.0008, 0.0062, 0.0008, M.dark, gx + Math.cos(a) * 0.0063, 0.0712, gz + Math.sin(a) * 0.0063); g.add(r2); } // 널링
+      g.add(roundBox(0.004, 0.002, 0.012, btnM, gx + sx * 0.027, 0.0405, gz, 0.0015), roundBox(0.012, 0.002, 0.004, btnM, gx, 0.0405, gz + 0.026, 0.0015)); // 트림
+      // 위쪽 토글 스위치 2개(SA·SB / SC·SD)
+      for (const k of [0, 1]) { const x = sx * (0.04 + k * 0.026); g.add(lathe([[0, 0.04], [0.0042, 0.04], [0.0042, 0.0435], [0.0028, 0.045], [0, 0.045]], M.aluLight, 6).translateX(x).translateZ(-0.036)); const lv = cyl(0.0015, 0.016, M.steel, x, 0.052, -0.036, 12); lv.rotation.x = -0.35; g.add(lv); g.add(cyl(0.0024, 0.004, M.dark, x, 0.059, -0.0386, 12).rotateX(-0.35)); const sl = nameplate(["SA", "SB", "SC", "SD"][(sx < 0 ? 0 : 2) + k], 0.008, 0.0035, null, "#d8dedc"); sl.position.set(x, 0.0405, -0.028); g.add(sl); }
     }
-    const ant = cyl(0.004, 0.06, dark, 0.07, 0.06, -0.04, 10); ant.rotation.z = -0.3; g.add(ant);
-    const hit = mesh(new T.BoxGeometry(0.19, 0.08, 0.13), HIT, 0, 0.035, 0.005); hit.userData.txBox = true; g.add(hit);
+    // 접이 손잡이(튜브)와 접이 안테나
+    { const hc = new T.CatmullRomCurve3([new T.Vector3(-0.038, 0.034, -0.046), new T.Vector3(-0.034, 0.05, -0.06), new T.Vector3(0, 0.056, -0.066), new T.Vector3(0.034, 0.05, -0.06), new T.Vector3(0.038, 0.034, -0.046)]); const hm = new T.Mesh(new T.TubeGeometry(hc, 40, 0.0045, 14), M.plastic); hm.castShadow = true; g.add(hm); }
+    g.add(lathe([[0, 0], [0.005, 0], [0.005, 0.006], [0, 0.006]], M.plastic, 20).translateX(0.072).translateY(0.036).translateZ(-0.04));
+    { const ag = new T.Group(); ag.position.set(0.072, 0.042, -0.04); ag.rotation.z = -0.3; ag.add(lathe([[0, 0], [0.0042, 0], [0.0046, 0.01], [0.004, 0.05], [0.003, 0.062], [0, 0.063]], M.rubber, 20)); g.add(ag); }
+    const lb = nameplate("TX12", 0.018, 0.006, null, "#e8ecec"); lb.position.set(0, 0.0408, 0.026); g.add(lb);
+    const hit = mesh(new T.BoxGeometry(0.2, 0.08, 0.14), HIT, 0, 0.035, 0.015); hit.userData.txBox = true; g.add(hit);
     toolObjs.tx = g;
   }
 
@@ -1037,7 +1068,7 @@ const BIND_MSG = { held: "바인드 버튼을 누르고 있습니다. 이 상태
         const o = h.object; if (o === liveWire || o === snapRing || !o.visible) return false;
         if (see && o === sc.topPlate) return false; // 투시(반투명) 중인 상판은 지나간다
         if (o.material !== HIT && (wires.children.includes(o) || expectGroup.children.includes(o))) return false; // 보이는 선은 넓은 클릭 영역(HIT)으로 판정
-        return !isTool(o);
+        return o.material === HIT || !isTool(o); // 장식(조종기 몸체 등)은 지나가되 클릭 영역은 남긴다
       });
       const real = (h) => h.object.material !== HIT || !!h.object.userData.tip; // 실제 모양 또는 선 끝
       // 작은 부품의 넉넉한 클릭 상자: 상자 안쪽에서 처음 만나는 실제 물체를 고르고, 없으면 그 부품
