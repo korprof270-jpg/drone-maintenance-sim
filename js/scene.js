@@ -10,13 +10,14 @@
   const restY = () => (SIM.has("skid") ? REST_Y : SIM.has("under") ? 0.05 * K : 0.018 * K);
   // 부품별 모형 배율 (프레임 대비 잘 보이도록 키움)
   const PS = { bottom: 1, top: 1, arm: 1, skid: 1, motor: 2.0, prop: 1.2, esc: 1.55, fc: 1.75, pm: 1.7, battery: 1.3, gps: 1.6, rx: 1.95, telem: 1.85, buzzer: 2.4, switch: 2.4 };
+  let composer, gtao, bloom, hemi, hdri = {};
   let renderer, scene, camera, drone, benchGroup, fieldGroup, partsRoot, wires, expectGroup, selBox, sun, snapRing, liveWire, stageEl;
   const air = {}, targets = [];
   const orbit = (sc.orbit = { theta: 0.3, phi: 0.86, dist: 2.75 * KS, target: new T.Vector3(0, 0.2 * KS, 0.16 * KS) });
   const poseQ = new T.Quaternion();
   sc.poseQ = poseQ;
 
-  const mat = (color, o) => new T.MeshStandardMaterial(Object.assign({ color: new T.Color(color).convertSRGBToLinear(), roughness: 0.6, metalness: 0.1 }, o || {}));
+  const mat = (color, o) => new T.MeshStandardMaterial(Object.assign({ color: new T.Color(color), roughness: 0.6, metalness: 0.1 }, o || {}));
   const M = {
     carbon: mat(0x22262a, { roughness: 0.45 }), red: mat(0xc8382e), white: mat(0xe9ecec), steel: mat(0xb9c0c4, { metalness: 0.8, roughness: 0.3 }),
     dark: mat(0x16181a), blue: mat(0x2b62c4), yellow: mat(0xe2b322), copper: mat(0xb86b2c, { metalness: 0.6, roughness: 0.4 }),
@@ -24,9 +25,20 @@
   };
   const HIT = new T.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false });
   // 카본 직조 무늬 (트윌) + 클리어코트
-  const carbonTex = (() => { const c = document.createElement("canvas"); c.width = c.height = 128; const g = c.getContext("2d"); for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) { const k = (x + y) % 4 < 2; const gr = g.createLinearGradient(x * 8, y * 8, x * 8 + 8, y * 8 + 8); gr.addColorStop(0, k ? "#2c3034" : "#17191c"); gr.addColorStop(1, k ? "#1b1e21" : "#24272b"); g.fillStyle = gr; g.fillRect(x * 8, y * 8, 8, 8); } const t = new T.CanvasTexture(c); t.wrapS = t.wrapT = T.RepeatWrapping; t.repeat.set(6, 6); t.encoding = T.sRGBEncoding; t.anisotropy = 8; return t; })();
-  M.carbon = new T.MeshPhysicalMaterial({ color: 0xffffff, map: carbonTex, roughness: 0.42, metalness: 0.15, clearcoat: 0.8, clearcoatRoughness: 0.25 });
-  M.steel = mat(0xc4cace, { metalness: 0.9, roughness: 0.25 });
+  const carbonTex = (() => { const c = document.createElement("canvas"); c.width = c.height = 128; const g = c.getContext("2d"); for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) { const k = (x + y) % 4 < 2; const gr = g.createLinearGradient(x * 8, y * 8, x * 8 + 8, y * 8 + 8); gr.addColorStop(0, k ? "#2c3034" : "#17191c"); gr.addColorStop(1, k ? "#1b1e21" : "#24272b"); g.fillStyle = gr; g.fillRect(x * 8, y * 8, 8, 8); } const t = new T.CanvasTexture(c); t.wrapS = t.wrapT = T.RepeatWrapping; t.repeat.set(6, 6); t.colorSpace = T.SRGBColorSpace; t.anisotropy = 8; return t; })();
+  // 높이(밝기) 그림 → 노멀맵: 카본 직조·나뭇결·금속 결이 빛을 받아 입체적으로 보이게 한다
+  function normalFrom(src, strength, repeat) {
+    const w = src.width, h = src.height, d = src.getContext("2d").getImageData(0, 0, w, h).data, c = document.createElement("canvas"); c.width = w; c.height = h;
+    const g = c.getContext("2d"), out = g.createImageData(w, h), L = (x, y) => d[(((y + h) % h) * w + ((x + w) % w)) * 4] / 255;
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const dx = (L(x + 1, y) - L(x - 1, y)) * strength, dy = (L(x, y + 1) - L(x, y - 1)) * strength, n = 1 / Math.hypot(dx, dy, 1), i = (y * w + x) * 4; out.data[i] = (-dx * n * 0.5 + 0.5) * 255; out.data[i + 1] = (dy * n * 0.5 + 0.5) * 255; out.data[i + 2] = n * 255; out.data[i + 3] = 255; }
+    g.putImageData(out, 0, 0); const t = new T.CanvasTexture(c); t.wrapS = t.wrapT = T.RepeatWrapping; if (repeat) t.repeat.copy(repeat); t.anisotropy = 8; return t;
+  }
+  const weaveH = (() => { const c = document.createElement("canvas"); c.width = c.height = 128; const g = c.getContext("2d"); for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) { const k = (x + y) % 4 < 2, gr = k ? g.createLinearGradient(x * 8, 0, x * 8 + 8, 0) : g.createLinearGradient(0, y * 8, 0, y * 8 + 8); gr.addColorStop(0, "#202020"); gr.addColorStop(0.5, "#ffffff"); gr.addColorStop(1, "#202020"); g.fillStyle = gr; g.fillRect(x * 8, y * 8, 8, 8); } return c; })();
+  M.carbon = new T.MeshPhysicalMaterial({ color: 0xffffff, map: carbonTex, normalMap: normalFrom(weaveH, 2.2, carbonTex.repeat), normalScale: new T.Vector2(0.35, 0.35), roughness: 0.38, metalness: 0.1, clearcoat: 1, clearcoatRoughness: 0.12 });
+  const brushed = (() => { const c = document.createElement("canvas"); c.width = 256; c.height = 64; const g = c.getContext("2d"); g.fillStyle = "#808080"; g.fillRect(0, 0, 256, 64); for (let i = 0; i < 900; i++) { const v = 112 + Math.random() * 40 | 0; g.fillStyle = "rgb(" + v + "," + v + "," + v + ")"; g.fillRect(Math.random() * 256, Math.random() * 64, 20 + Math.random() * 120, 1); } const t = new T.CanvasTexture(c); t.wrapS = t.wrapT = T.RepeatWrapping; t.repeat.set(2, 2); return t; })();
+  M.steel = new T.MeshPhysicalMaterial({ color: new T.Color(0xc4cace), metalness: 1, roughness: 0.32, roughnessMap: brushed });
+  M.dark.roughness = 0.5; M.dark.clearcoat = 0;
+  M.plastic = new T.MeshPhysicalMaterial({ color: new T.Color(0x16181a), roughness: 0.45, metalness: 0, clearcoat: 0.5, clearcoatRoughness: 0.35 });
   // 모서리가 둥근 상자 (전자부품 외형)
   function roundBox(w, h, d, m, x, y, z, r) {
     r = Math.min(r || 0.003, w / 2.2, d / 2.2); const b = Math.min(r * 0.6, h * 0.3);
@@ -50,7 +62,7 @@
     c.width = w; c.height = h;
     draw(c.getContext("2d"), w, h);
     const t = new T.CanvasTexture(c);
-    t.encoding = T.sRGBEncoding; t.anisotropy = 4;
+    t.colorSpace = T.SRGBColorSpace; t.anisotropy = 8;
     return t;
   }
   // 윗면 화살표 데칼 (캔버스 위쪽 = 기체 앞쪽)
@@ -581,17 +593,52 @@ const BIND_MSG = { held: "바인드 버튼을 누르고 있습니다. 이 상태
   function applyTheme() {
     const cs = getComputedStyle(document.documentElement);
     const c = cs.getPropertyValue(sc.env === "field" ? "--sky" : "--scene").trim() || "#dfe6e4";
-    scene.background = new T.Color(c);
+    const H = hdri[sc.env === "field" ? "field" : "bench"];
+    if (H) scene.environment = H.env;
+    scene.environmentIntensity = sc.env === "field" ? 0.4 : 0.9;
+    if (hemi) hemi.intensity = sc.env === "field" ? 0.25 : 0.5;
+    if (H && sc.env !== "field") { scene.background = H.bg; scene.backgroundBlurriness = 0.55; scene.backgroundIntensity = 0.55; }
+    else { scene.background = new T.Color(c); scene.backgroundBlurriness = 0; scene.backgroundIntensity = 1; }
     scene.fog = sc.env === "field" ? new T.Fog(c, 60, 220) : null;
   }
+
+  // ---------- 실사 환경광(HDRI, Poly Haven CC0): 작업장 / 야외 하늘 ----------
+  function loadHdri() {
+    const A = T.addons; if (!A || !A.EXRLoader) return;
+    const pm = new T.PMREMGenerator(renderer);
+    for (const [k, f] of [["bench", "assets/hdri/workshop.exr"], ["field", "assets/hdri/sky.exr"]]) {
+      new A.EXRLoader().load(f, (tex) => { tex.mapping = T.EquirectangularReflectionMapping; hdri[k] = { bg: tex, env: pm.fromEquirectangular(tex).texture }; applyTheme(); }, undefined, () => {});
+    }
+  }
+  // ---------- 후처리: 주변광 차폐(GTAO) · 빛 번짐(Bloom) · 톤매핑 출력, MSAA ----------
+  function setupPost(w, h) {
+    const A = T.addons; if (!A || !A.EffectComposer) return;
+    try {
+      const rt = new T.WebGLRenderTarget(w, h, { type: T.HalfFloatType, samples: 4 });
+      composer = new A.EffectComposer(renderer, rt);
+      composer.addPass(new A.RenderPass(scene, camera));
+      gtao = new A.GTAOPass(scene, camera, w, h);
+      gtao.updateGtaoMaterial({ radius: 0.12 * K, distanceExponent: 1.6, thickness: 0.6 * K, scale: 1.0, samples: 16 });
+      gtao.updatePdMaterial({ lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 6, rings: 2, samples: 16 });
+      gtao.blendIntensity = 0.85;
+      // 보이지 않는 클릭 영역·글자판·투명 효과는 그림자(차폐) 계산에서 뺀다
+      const ov = gtao.overrideVisibility.bind(gtao);
+      gtao.overrideVisibility = function () { ov(); scene.traverse((o) => { const m = o.material; if (o.isSprite || m === HIT || (m && m.transparent && m.opacity < 0.5) || (m && m.depthTest === false)) o.visible = false; }); };
+      composer.addPass(gtao);
+      bloom = new A.UnrealBloomPass(new T.Vector2(w, h), 0.18, 0.35, 0.95);
+      composer.addPass(bloom);
+      composer.addPass(new A.OutputPass());
+    } catch (e) { composer = null; }
+  }
+  sc.post = () => ({ composer: !!composer, gtao: !!(gtao && gtao.enabled), bloom: !!(bloom && bloom.enabled), hdri: Object.keys(hdri) });
 
   // ---------- 초기화 ----------
   sc.init = function (canvas) {
     stageEl = canvas.parentElement;
     renderer = new T.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
     renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
-    renderer.outputEncoding = T.sRGBEncoding;
-    renderer.toneMapping = T.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.05;
+    renderer.outputColorSpace = T.SRGBColorSpace;
+    renderer.toneMapping = T.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.0;
     renderer.shadowMap.enabled = true; renderer.shadowMap.type = T.PCFSoftShadowMap;
     scene = new T.Scene();
     camera = sc.camera = new T.PerspectiveCamera(42, 1, 0.02, 400);
@@ -602,11 +649,12 @@ const BIND_MSG = { held: "바인드 버튼을 누르고 있습니다. 이 상태
       const cols = [], pos = room.geometry.attributes.position; for (let i = 0; i < pos.count; i++) { const y = pos.getY(i) / 10, c = new T.Color().setHSL(0.55, 0.08, 0.35 + 0.45 * Math.max(0, y)); cols.push(c.r, c.g, c.b); }
       room.geometry.setAttribute("color", new T.Float32BufferAttribute(cols, 3)); env.add(room);
       for (const [x, z, w] of [[0, 0, 6], [5, 3, 2], [-5, -2, 2.5]]) { const p = new T.Mesh(new T.PlaneGeometry(w, w * 0.5), new T.MeshBasicMaterial({ color: 0xffffff })); p.position.set(x, 8, z); p.rotation.x = Math.PI / 2; env.add(p); }
-      scene.environment = pm.fromScene(env, 0.04).texture; pm.dispose();
+      scene.environment = pm.fromScene(env, 0.04).texture; pm.dispose(); // 실사 HDRI를 불러오기 전 임시 환경광
     } catch (e) {}
-    scene.add(new T.HemisphereLight(0xffffff, 0x556060, 0.55));
-    sun = new T.DirectionalLight(0xfff6e8, 1.1);
-    sun.castShadow = true; sun.shadow.mapSize.set(2048, 2048);
+    loadHdri();
+    hemi = new T.HemisphereLight(0xffffff, 0x556060, 0.5); scene.add(hemi);
+    sun = new T.DirectionalLight(0xfff3e2, 2.6);
+    sun.castShadow = true; sun.shadow.mapSize.set(4096, 4096);
     Object.assign(sun.shadow.camera, { left: -3 * KS, right: 3 * KS, top: 3 * KS, bottom: -3 * KS, near: 0.1, far: 16 * KS });
     sun.shadow.bias = -0.0006; sun.shadow.normalBias = 0.02; sun.shadow.radius = 3;
     scene.add(sun, sun.target);
@@ -614,20 +662,22 @@ const BIND_MSG = { held: "바인드 버튼을 누르고 있습니다. 이 상태
     // 작업대
     benchGroup = new T.Group();
     const wood = canvasTex(512, 256, (g, W, H) => { g.fillStyle = "#8a6646"; g.fillRect(0, 0, W, H); for (let i = 0; i < 90; i++) { g.strokeStyle = "rgba(" + (60 + Math.random() * 40) + "," + (40 + Math.random() * 25) + ",20," + (0.15 + Math.random() * 0.2) + ")"; g.lineWidth = 1 + Math.random() * 2; g.beginPath(); const y0 = Math.random() * H; g.moveTo(0, y0); for (let x = 0; x <= W; x += 32) g.lineTo(x, y0 + Math.sin(x * 0.02 + i) * 4); g.stroke(); } });
-    const top = box(4.0 * KS, 0.08, 2.9 * KS, new T.MeshStandardMaterial({ map: wood, roughness: 0.7 }), 0, -0.044, 0); top.castShadow = false;
+    const top = box(4.0 * KS, 0.08, 2.9 * KS, new T.MeshPhysicalMaterial({ map: wood, normalMap: normalFrom(wood.image, 3), normalScale: new T.Vector2(0.6, 0.6), roughness: 0.55, clearcoat: 0.35, clearcoatRoughness: 0.4 }), 0, -0.044, 0); top.castShadow = false;
     const matTex = canvasTex(1024, 640, (g, W, H) => {
       g.fillStyle = "#1d6b55"; g.fillRect(0, 0, W, H);
       for (let i = 0; i <= 36; i++) { g.strokeStyle = i % 5 ? "rgba(255,255,255,0.14)" : "rgba(255,255,255,0.34)"; g.lineWidth = i % 5 ? 1 : 2; g.beginPath(); g.moveTo((i * W) / 36, 0); g.lineTo((i * W) / 36, H); g.stroke(); }
       for (let i = 0; i <= 22; i++) { g.strokeStyle = i % 5 ? "rgba(255,255,255,0.14)" : "rgba(255,255,255,0.34)"; g.lineWidth = i % 5 ? 1 : 2; g.beginPath(); g.moveTo(0, (i * H) / 22); g.lineTo(W, (i * H) / 22); g.stroke(); }
     });
-    const pad = mesh(new T.BoxGeometry(3.4 * KS, 0.004, 2.4 * KS), new T.MeshStandardMaterial({ map: matTex, roughness: 0.9 }), 0, -0.002, 0); pad.castShadow = false;
+    const pad = mesh(new T.BoxGeometry(3.4 * KS, 0.004, 2.4 * KS), new T.MeshStandardMaterial({ map: matTex, roughness: 0.85 }), 0, -0.002, 0); pad.castShadow = false;
     benchGroup.add(top, pad);
     scene.add(benchGroup);
 
     // 시험장
     fieldGroup = new T.Group();
-    const ground = mesh(new T.PlaneGeometry(600, 600), mat(0x6f9a63, { roughness: 1 })); ground.rotation.x = -Math.PI / 2; ground.castShadow = false;
-    const grid = new T.GridHelper(200, 100, 0xffffff, 0xffffff); grid.material.opacity = 0.18; grid.material.transparent = true; grid.position.y = 0.004;
+    const grass = canvasTex(256, 256, (g, W, H) => { g.fillStyle = "#4f7a45"; g.fillRect(0, 0, W, H); for (let i = 0; i < 5000; i++) { const l = 30 + Math.random() * 22, h = 95 + Math.random() * 20; g.fillStyle = "hsl(" + h + ",32%," + l + "%)"; g.fillRect(Math.random() * W, Math.random() * H, 1 + Math.random() * 2, 2 + Math.random() * 4); } });
+    grass.wrapS = grass.wrapT = T.RepeatWrapping; grass.repeat.set(160, 160);
+    const ground = mesh(new T.PlaneGeometry(600, 600), new T.MeshStandardMaterial({ map: grass, normalMap: normalFrom(grass.image, 2, grass.repeat), normalScale: new T.Vector2(0.5, 0.5), roughness: 1 })); ground.rotation.x = -Math.PI / 2; ground.castShadow = false;
+    const grid = new T.GridHelper(200, 100, 0xffffff, 0xffffff); grid.material.opacity = 0.07; grid.material.transparent = true; grid.position.y = 0.004;
     const padTex = canvasTex(256, 256, (g) => { g.fillStyle = "#30363a"; g.beginPath(); g.arc(128, 128, 124, 0, 7); g.fill(); g.strokeStyle = "#ffd45e"; g.lineWidth = 10; g.beginPath(); g.arc(128, 128, 104, 0, 7); g.stroke(); g.fillStyle = "#fff"; g.font = "bold 130px sans-serif"; g.textAlign = "center"; g.textBaseline = "middle"; g.fillText("H", 128, 136); });
     const hp = new T.Mesh(new T.PlaneGeometry(3 * KS, 3 * KS), new T.MeshStandardMaterial({ map: padTex, transparent: true, roughness: 0.9 })); hp.rotation.x = -Math.PI / 2; hp.position.y = 0.006; hp.receiveShadow = true;
     fieldGroup.add(ground, grid, hp);
@@ -663,7 +713,8 @@ const BIND_MSG = { held: "바인드 버튼을 누르고 있습니다. 이 상태
       new MutationObserver(applyTheme).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
     } catch (e) {}
     bindPointer(canvas);
-    const resize = () => { const w = canvas.clientWidth || 300, h = canvas.clientHeight || 200; renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); };
+    setupPost(canvas.clientWidth || 300, canvas.clientHeight || 200);
+    const resize = () => { const w = canvas.clientWidth || 300, h = canvas.clientHeight || 200; renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); if (composer) { composer.setPixelRatio(renderer.getPixelRatio()); composer.setSize(w, h); } };
     try { const ro = new ResizeObserver(resize); ro.observe(stageEl); ro.observe(canvas); } catch (e) {} window.addEventListener("resize", resize);
     resize();
     sc.sync();
@@ -1072,6 +1123,7 @@ const BIND_MSG = { held: "바인드 버튼을 누르고 있습니다. 이 상태
   function adaptQuality(dt) {
     if (perfLow) return; perfT += dt; perfN++;
     if (perfT > 3) { const avg = perfT / perfN; perfT = 0; perfN = 0;
+      if (avg > 1 / 30 && gtao && gtao.enabled) { gtao.enabled = false; bloom.enabled = false; return; } // 1단계: 후처리 끄기
       if (avg > 1 / 24) { perfLow = true; renderer.setPixelRatio(1); renderer.shadowMap.type = T.PCFShadowMap; sun.shadow.mapSize.set(1024, 1024); if (sun.shadow.map) { sun.shadow.map.dispose(); sun.shadow.map = null; } window.dispatchEvent(new Event("resize")); } }
   }
   function tweenCam(dt) {
@@ -1081,7 +1133,7 @@ const BIND_MSG = { held: "바인드 버튼을 누르고 있습니다. 이 상태
     let dth = gl.theta - orbit.theta; dth = Math.atan2(Math.sin(dth), Math.cos(dth)); orbit.theta += dth * k;
     if (orbit.target.distanceTo(gl.target) < 0.002 && Math.abs(gl.dist - orbit.dist) < 0.002 && Math.abs(gl.phi - orbit.phi) < 0.002) sc.camGoal = null;
   }
-  sc.update = function (dt) {
+  sc.update = function (dt, skipRender) {
     tweenCam(dt);
     adaptQuality(dt);
     const k = 1 - Math.exp(-12 * dt);
@@ -1128,6 +1180,7 @@ const BIND_MSG = { held: "바인드 버튼을 누르고 있습니다. 이 상태
     camera.lookAt(orbit.target);
     sun.position.set(orbit.target.x + 1.8 * KS, orbit.target.y + 5.5 * KS, orbit.target.z + 2.4 * KS);
     sun.target.position.copy(orbit.target);
-    renderer.render(scene, camera);
+    if (skipRender) return;
+    if (composer) composer.render(); else renderer.render(scene, camera);
   };
 })();
