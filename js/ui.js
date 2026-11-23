@@ -64,6 +64,9 @@
       }
     }
     let b = "";
+    // 이 부품에서 나오는 선을 집어 연결 시작 (선 끝이 작거나 다른 부품에 가려져 있을 때)
+    const LEADS = { pm: [["out", "출력선(XT60)"], ["fc", "FC 케이블"]], battery: [["xt", "전원선(XT60)"]], esc: [["pwr", "전원선(XT60)"], ["sig", "신호선"], ["tel", "통신선"]], gps: [["gps", "GPS 케이블"], ["compass", "나침반 케이블"]], rx: [["sig", "FC 쪽 커넥터"]], telem: [["fc", "FC 케이블"]], buzzer: [["fc", "FC 케이블"]], switch: [["fc", "FC 케이블"]], motor: [["ph1", "모터선 ①"], ["ph2", "모터선 ②"], ["ph3", "모터선 ③"]] }[p.type];
+    if (LEADS) b += '<div class="leadbtns"><span class="muted small">선 연결</span>' + LEADS.map(([k, n]) => btn("wireStart", n, "", id + ":" + k)).join("") + "</div>";
     if (p.type === "fc") b += btn("fcView", "세부 보기 · 포트", "primary");
     if (slot && p.type === "bottom") b += btn("pdbView", "세부 보기 · 커넥터", "primary");
     if (slot && (p.type === "fc" || p.type === "gps")) b += btn("rotate", "90° 돌리기", "", id);
@@ -580,6 +583,7 @@
     install: (a) => { const e = SIM.install(SIM.selected, a); if (e) SIM.toast(e, "bad"); },
     remove: (a) => SIM.remove(a), rotate: (a) => SIM.rotate(a), flip: (a) => SIM.flipProp(a),
     fcView: () => { ui.fcView = true; ui.fcAuto = false; ui.cable = null; render(); }, fcClose: () => { ui.fcView = false; render(); },
+    wireStart: (a) => { const i = a.lastIndexOf(":"); SIM.select(null); SIM.scene.startTip({ part: a.slice(0, i), key: a.slice(i + 1) }); },
     rxView: () => { ui.rxView = true; SIM.select(null); render(); }, rxClose: () => { ui.rxView = false; render(); },
     rxPin: (a) => { const w = SIM.state.wiring; if (w.rxEnd === a) { w.rxEnd = ""; return SIM.emit(); } w.rxEnd = a; SIM.sfx("plug"); SIM.emit(); },
     rxPort: (a) => { if (SIM.state.wiring.plug.rx === a) return SIM.setPlug("rx", ""); SIM.setPlug("rx", a); SIM.sfx("plug"); },

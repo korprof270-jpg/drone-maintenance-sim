@@ -305,3 +305,5 @@ body:not(.dock) .navgroup { display: none; }
 .rxside { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 8px 0; border-top: 1px solid var(--line); }
 .rxside b { min-width: 70px; }
 .tray .small { font-size: 12px; margin: 0 0 4px; }
+.leadbtns { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; width: 100%; }
+.leadbtns .small { font-size: 12px; width: 100%; }

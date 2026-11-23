@@ -929,6 +929,7 @@ const BIND_MSG = { held: "바인드 버튼을 누르고 있습니다. 이 상태
     return best;
   }
   sc.disconnectTip = (tip) => { disconnect(tip); SIM.emit(); };
+  sc.startTip = (tip) => { if (!objs[tip.part] || !objs[tip.part].tips[tip.key]) return; startPick(tip); SIM.toast("연결할 곳을 누르세요 (Esc: 취소)"); }; // 팝업의 '선 연결' 버튼
   // 카메라를 부드럽게 옮긴다: FC 확대 → 포트를 꽂거나 취소하면 원래 시점으로
   function zoomFc() {
     const g = objs.fc.group, c = new T.Box3().setFromObject(g).getCenter(new T.Vector3());
@@ -948,6 +949,11 @@ const BIND_MSG = { held: "바인드 버튼을 누르고 있습니다. 이 상태
     const pos = (SIM.state.install[tip.part] || "").split("@")[1];
     const say = (m) => SIM.toast(m, "bad");
     const ok = (t) => { if (SIM.sfx) SIM.sfx(t || "plug"); };
+    // 전원·모터 배선은 기체에 장착한 부품끼리만 닿는다 (작업대 위에서는 안내만)
+    if (["escPad", "motorPh", "xt", "pdbMain", "pdb", "harness", "pmIn"].includes(tg.kind)) {
+      if (!SIM.state.install[tip.part]) return say("먼저 " + part.name + "을(를) 기체에 장착한 뒤 연결하세요.");
+      if (tg.part && SIM.part(tg.part) && !SIM.state.install[tg.part]) return say("먼저 " + SIM.part(tg.part).name + "을(를) 기체에 장착한 뒤 연결하세요.");
+    }
     if (tg.kind === "escPad") {
       if (part.type !== "motor") return say(part.type === "esc" ? "단자끼리는 연결하지 않습니다. 모터선 끝에 놓으세요." : "이 선은 ESC 단자에 연결하지 않습니다.");
       const escPos = SIM.state.install[tg.part].split("@")[1];
@@ -1024,46 +1030,57 @@ const BIND_MSG = { held: "바인드 버튼을 누르고 있습니다. 이 상태
         if (best) return best;
       }
       const see = sc.xray || !!sc.pick;
-      if (sc.pick && sc.pick.part === "rx") { // 수신기 선을 든 채 수신기나 FC를 누르면 수신기↔FC 배선 세부 보기
-        const gs = ["rx", "fc"].filter((id) => objs[id]).map((id) => objs[id].group), rh = ray.intersectObjects(gs, true).find((x) => x.object.visible && x.object !== liveWire);
-        if (rh) return { target: { kind: "rxDetail", label: "수신기 ↔ FC 배선 · 자리 고르기" }, point: rh.point };
-      }
       if (sc.pick && /^(ph\d|pad[ABC])$/.test(sc.pick.key)) { const np = nearestPhase(e.clientX, e.clientY); if (np) return { target: np, point: null }; }
-      let soft = null; // 넉넉한 클릭 영역(작은 부품·선): 바로 뒤에 단자·선 끝이 있으면 그쪽을 고른다
-      const hard = (h, res) => res; // 선 끝·단자·포트는 넓은 클릭 영역(부품 상자·선·판)에 가려지지 않는다
-      const fcCableTip = (t) => { const pt = SIM.part(t.part); return pt && (["pm", "gps", "rx", "telem", "buzzer", "switch"].includes(pt.type) && ["fc", "gps", "compass", "sig"].includes(t.key)); };
-      for (const h of ray.intersectObjects(list, true)) {
-        if (h.object === liveWire || h.object === snapRing || !h.object.visible) continue;
-        if (see && h.object === sc.topPlate) continue; // 투시 중에는 상판을 지나 아래를 누른다
-        if (sc.pick && h.object.material !== HIT) continue; // 연결 중에는 단자·선 끝만 찾는다
-        if (h.object.material === HIT) {
-          const ud = h.object.userData;
-          if (!sc.pick && ud.txBox) return hard(h, { txBox: true, point: h.point });
-          if (!sc.pick && ud.bin) return hard(h, { bin: ud.bin, point: h.point });
-          if (!sc.pick && ud.key) return hard(h, { key: ud.key, point: h.point });
-          if (!sc.pick && ud.hole) { if (SIM.state.install[ud.hole.split(":")[0]]) return hard(h, { hole: ud.hole, point: h.point }); continue; }
-          if (ud.bind && !sc.pick) return hard(h, { bind: true, part: ud.bind, point: h.point });
-          if (ud.tip) { const t = ud.tip; if (SIM.state.install[t.part] || fcCableTip(t)) return hard(h, { tip: t, point: h.point }); continue; }
-          if (ud.target) { const tg = ud.target; if (sc.pick && (!tg.part || SIM.state.install[tg.part] || tg.kind === "fcPort" || tg.kind === "fc")) return { target: tg, point: h.point }; const id = partOf(h.object); if (id) return hard(h, { part: id, point: h.point }); continue; }
-          if (!sc.pick && ud.wire) { if (!soft) soft = { d: h.distance, tol: 0.04, res: { wire: ud.wire, point: h.point } }; continue; }
-          if (!sc.pick && ud.partHit) { if (!soft) soft = { d: h.distance, tol: 0.04, res: { part: ud.partHit, point: h.point } }; continue; }
+      // 맞은 순서(카메라에서 가까운 순)대로: 가장 바깥에 있는 물체가 클릭된다. 뒤에 가려진 부품·선 끝은 눌리지 않는다
+      const isTool = (o) => { while (o) { if (o.userData.tool) return true; o = o.parent; } return false; };
+      const hits = ray.intersectObjects(list, true).filter((h) => {
+        const o = h.object; if (o === liveWire || o === snapRing || !o.visible) return false;
+        if (see && o === sc.topPlate) return false; // 투시(반투명) 중인 상판은 지나간다
+        if (o.material !== HIT && (wires.children.includes(o) || expectGroup.children.includes(o))) return false; // 보이는 선은 넓은 클릭 영역(HIT)으로 판정
+        return !isTool(o);
+      });
+      const real = (h) => h.object.material !== HIT || !!h.object.userData.tip; // 실제 모양 또는 선 끝
+      // 작은 부품의 넉넉한 클릭 상자: 상자 안쪽에서 처음 만나는 실제 물체를 고르고, 없으면 그 부품
+      const resolveBox = (k, pid) => { for (let n = k + 1; n < hits.length; n++) { const h2 = hits[n]; if (!real(h2)) continue; if (h2.object.userData.tip) return { tip: h2.object.userData.tip, point: h2.point }; return { part: partOf(h2.object) || pid, point: h2.point }; } return { part: pid, point: hits[k].point }; };
+      if (!sc.pick) {
+        for (let k = 0; k < hits.length; k++) {
+          const h = hits[k], o = h.object, ud = o.userData;
+          if (o.material === HIT) {
+            if (ud.txBox) return { txBox: true, point: h.point };
+            if (ud.bin) return { bin: ud.bin, point: h.point };
+            if (ud.key) return { key: ud.key, point: h.point };
+            if (ud.hole) { if (SIM.state.install[ud.hole.split(":")[0]]) return { hole: ud.hole, point: h.point }; continue; }
+            if (ud.bind) return { bind: true, part: ud.bind, point: h.point };
+            if (ud.tip) return { tip: ud.tip, point: h.point }; // 작업대 위 부품의 선 끝도 집을 수 있다
+            if (ud.wire) return { wire: ud.wire, point: h.point };
+            if (ud.partHit) return resolveBox(k, ud.partHit);
+            if (ud.target) { const id = partOf(o); if (id) return { part: id, point: h.point }; }
+            continue;
+          }
+          const id = partOf(o);
+          return id ? { part: id, point: h.point } : { frame: true, point: h.point };
+        }
+        return { point: ray.ray.intersectPlane(plane, hitP) ? hitP.clone() : null };
+      }
+      // 선을 든 채: 가장 바깥 물체가 단자·포트면 거기에, 부품이면 그 부품의 세부 보기로 (가려진 곳은 지나가지 않는다)
+      const tip = sc.pick;
+      const mapPart = (id, point) => {
+        if (!id) return null;
+        if (tip.part === "rx" && (id === "rx" || id === "fc")) return { target: { kind: "rxDetail", label: "수신기 ↔ FC 배선 · 자리 고르기" }, point };
+        if (id === "fc" && tipCableOf(tip)) return { target: { kind: "fc", part: "fc", label: "비행 컨트롤러 · 포트 고르기" }, point };
+        if (id === "pm" && SIM.part(tip.part).type === "battery") return { target: { kind: "pmIn", part: "pm", label: "PMU 입력 커넥터" }, point };
+        if (pdbCable(tip) && SIM.state.install.frameBot && (id === "frameBot" || id === "frameTop" || /^bot:/.test(SIM.state.install[id] || ""))) return { target: { kind: "pdb", part: "frameBot", label: "하판(PDB) · 자리 고르기" }, point };
+        return null;
+      };
+      for (let k = 0; k < hits.length; k++) {
+        const h = hits[k], o = h.object, ud = o.userData;
+        if (o.material === HIT) {
+          if (ud.target) { const tg = ud.target; if (!tg.part || SIM.state.install[tg.part] || tg.kind === "fcPort" || tg.kind === "fc") return { target: tg, point: h.point }; const m2 = mapPart(partOf(o), h.point); if (m2) return m2; continue; }
+          if (ud.tip) { if (ud.tip.part === tip.part && ud.tip.key === tip.key) continue; const m2 = mapPart(ud.tip.part, h.point); return m2 || { tip: ud.tip, point: h.point }; }
+          if (ud.partHit) { const r2 = resolveBox(k, ud.partHit); if (r2.tip) return mapPart(r2.tip.part, r2.point) || r2; return mapPart(r2.part, r2.point) || { point: r2.point, blocked: r2.part }; }
           continue;
         }
-        if (wires.children.includes(h.object) || expectGroup.children.includes(h.object)) continue;
-        { let o = h.object, tool = false; while (o) { if (o.userData.tool) { tool = true; break; } o = o.parent; } if (tool) continue; } // 공구 장식은 지나친다
-        const id = partOf(h.object);
-        // 상판·하판은 뒤에 가려진 부품을 먼저 고를 수 있게 한다 (판 아래·위의 작은 부품, 선 끝)
-        if (h.object.userData.plate) { if (!soft) soft = { d: h.distance, tol: 0.16, res: { part: id, point: h.point } }; continue; }
-        if (soft) return soft.tol > 0.1 && id && h.distance < soft.d + soft.tol ? { part: id, point: h.point } : soft.res;
-        if (id) return { part: id, point: h.point };
-        return { frame: true, point: h.point };
-      }
-      if (soft) return soft.res;
-      // 선을 든 채 FC·하판 근처를 누르면 세부 보기 (작은 포트를 정확히 누르지 않아도 된다)
-      if (sc.pick) {
-        const groups = (ids) => ids.filter((id) => objs[id]).map((id) => objs[id].group);
-        if (tipCableOf(sc.pick)) { const fh = ray.intersectObjects(groups(["fc"]), true).find((x) => x.object.visible); if (fh) return { target: { kind: "fc", part: "fc", label: "비행 컨트롤러 · 포트 고르기" }, point: fh.point }; }
-        if (pdbCable(sc.pick) && SIM.state.install.frameBot) { const ids = ["frameBot"]; if (SIM.state.install.frameTop) ids.push("frameTop"); for (const p of SIM.PARTS) if (/^bot:/.test(SIM.state.install[p.id] || "")) ids.push(p.id); const ph = ray.intersectObjects(groups(ids), true).find((x) => x.object.visible); if (ph) return { target: { kind: "pdb", part: "frameBot", label: "하판(PDB) · 자리 고르기" }, point: ph.point }; }
+        return mapPart(partOf(o), h.point) || { point: h.point, blocked: partOf(o) || "frame" }; // 다른 물체에 가로막힘
       }
       return { point: ray.ray.intersectPlane(plane, hitP) ? hitP.clone() : null };
     }
@@ -1173,6 +1190,7 @@ const BIND_MSG = { held: "바인드 버튼을 누르고 있습니다. 이 상태
       if (sc.pick) {
         if (h.target) finishPick(h.target);
         else if (h.tip) { sc.cancelPick(); startPick(h.tip); }
+        else if (h.blocked) { const bp = SIM.part(h.blocked); SIM.toast((bp ? bp.name : "그곳") + "에는 이 선을 연결할 수 없습니다. 연결할 곳이 가려져 있으면 시점을 돌리거나 위 부품을 먼저 떼세요.", "bad"); } // 선은 계속 들고 있다
         else { sc.cancelPick(); SIM.emit(); }
         return;
       }
