@@ -133,27 +133,36 @@
   }
   // 매끄러운 곡선 프로펠러 날개: 평면형(뿌리 좁고 가운데 넓고 끝이 둥근) + 비틀림
   const BLADE_R = 0.115;
+  // 프로펠러 날개: 실제 날개 단면(캠버 있는 에어포일)을 반지름 방향으로 이어 붙인 로프트 + 비틀림 + 둥근 끝
+  const bladeTwist = (s, r) => s * (0.5 - 0.32 * Math.min(1, Math.max(0, r / BLADE_R)));
   function bladeGeo(s) {
-    const sh = new T.Shape();
-    sh.moveTo(0.008, -0.006);
-    sh.bezierCurveTo(0.03, -0.012, 0.06, -0.012, 0.1, -0.008);
-    sh.quadraticCurveTo(BLADE_R + 0.002, -0.006, BLADE_R, 0.0);
-    sh.quadraticCurveTo(BLADE_R - 0.002, 0.007, 0.098, 0.009);
-    sh.bezierCurveTo(0.07, 0.016, 0.035, 0.02, 0.008, 0.007);
-    sh.closePath();
-    const geo = new T.ExtrudeGeometry(sh, { depth: 0.0012, bevelEnabled: true, bevelThickness: 0.0006, bevelSize: 0.0008, bevelSegments: 2, curveSegments: 24 });
-    geo.translate(0, 0, -0.0006); geo.rotateX(-Math.PI / 2);
-    const pos = geo.attributes.position, v = new T.Vector3();
-    for (let i = 0; i < pos.count; i++) {
-      v.fromBufferAttribute(pos, i);
-      const th = s * (0.5 - 0.32 * Math.min(1, Math.max(0, v.x / BLADE_R)));
-      const y = v.y * Math.cos(th) - v.z * Math.sin(th), z = v.y * Math.sin(th) + v.z * Math.cos(th);
-      pos.setXYZ(i, v.x, y + 0.004, z);
+    const R0 = 0.011, NR = 44, NA = 36, pos = [], uv = [], idx = [];
+    const chordAt = (r) => { const t = (r - R0) / (BLADE_R - R0); let c = 0.011 + 0.016 * Math.sin(Math.min(1, t / 0.35) * Math.PI / 2) - 0.006 * Math.max(0, (t - 0.35) / 0.65); if (t > 0.86) c *= Math.sqrt(Math.max(0, 1 - Math.pow((t - 0.86) / 0.14, 2))); return Math.max(c, 0.0004); };
+    const thickAt = (r) => { const t = (r - R0) / (BLADE_R - R0); return 0.2 - 0.12 * t; }; // 뿌리 20% → 끝 8%
+    for (let i = 0; i <= NR; i++) {
+      const r = R0 + (BLADE_R - R0) * (1 - Math.pow(1 - i / NR, 1.4)), c = chordAt(r), tk = thickAt(r), th = bladeTwist(s, r), sweep = 0.004 * Math.pow(r / BLADE_R, 2);
+      for (let j = 0; j <= NA; j++) {
+        const a = (j / NA) * Math.PI * 2, u = 0.5 + 0.5 * Math.cos(a), up = j <= NA / 2; // 앞전(u=0)→뒷전(u=1) 위·아래 한 바퀴
+        const yt = 5 * tk * (0.2969 * Math.sqrt(u) - 0.126 * u - 0.3516 * u * u + 0.2843 * u * u * u - 0.1036 * u * u * u * u);
+        const m = 0.04, pp = 0.4, yc = u < pp ? (m / (pp * pp)) * (2 * pp * u - u * u) : (m / ((1 - pp) * (1 - pp))) * (1 - 2 * pp + 2 * pp * u - u * u);
+        const y = (yc + (up ? yt : -yt)) * c, zc = (u - 0.38) * c * -s + sweep * -s; // 회전 방향 쪽이 앞전
+        const ry = y * Math.cos(th) - zc * Math.sin(th), rz = y * Math.sin(th) + zc * Math.cos(th);
+        pos.push(r, ry + 0.004, rz); uv.push(u * 0.6, r * 12);
+      }
     }
-    geo.computeVertexNormals();
+    for (let i = 0; i < NR; i++) for (let j = 0; j < NA; j++) { const a = i * (NA + 1) + j, b = a + NA + 1; if (s > 0) idx.push(a, b, a + 1, b, b + 1, a + 1); else idx.push(a, a + 1, b, b, a + 1, b + 1); }
+    const geo = new T.BufferGeometry(); geo.setAttribute("position", new T.Float32BufferAttribute(pos, 3)); geo.setAttribute("uv", new T.Float32BufferAttribute(uv, 2)); geo.setIndex(idx); geo.computeVertexNormals();
     return geo;
   }
-  const bladeTwist = (s, r) => s * (0.5 - 0.32 * (r / BLADE_R));
+  // 회전체(선반 가공) 모양: [반지름, 높이] 점들
+  const lathe = (pts, m, seg) => { const g2 = new T.LatheGeometry(pts.map(([r, y]) => new T.Vector2(r, y)), seg || 48); const o2 = new T.Mesh(g2, m); o2.castShadow = o2.receiveShadow = true; return o2; };
+  // 아노다이징 알루미늄·에나멜 구리선·프롭 카본
+  M.alu = new T.MeshPhysicalMaterial({ color: new T.Color(0x3a3f45), metalness: 1, roughness: 0.34, roughnessMap: brushed, side: T.DoubleSide });
+  M.aluLight = new T.MeshPhysicalMaterial({ color: new T.Color(0xb8bec4), metalness: 1, roughness: 0.28, roughnessMap: brushed });
+  M.accent = new T.MeshPhysicalMaterial({ color: new T.Color(0xc0392b), metalness: 0.9, roughness: 0.3 });
+  M.winding = new T.MeshPhysicalMaterial({ color: new T.Color(0xc87533), metalness: 0.85, roughness: 0.32, clearcoat: 0.6, clearcoatRoughness: 0.2 });
+  M.core = new T.MeshStandardMaterial({ color: new T.Color(0x2a2c2f), metalness: 0.7, roughness: 0.5 });
+  M.propC = (() => { const t = carbonTex.clone(); t.repeat.set(1, 1); t.needsUpdate = true; return new T.MeshPhysicalMaterial({ color: 0xffffff, map: t, roughness: 0.34, metalness: 0.1, clearcoat: 1, clearcoatRoughness: 0.08, side: T.DoubleSide }); })();
 
   // FC 윗면 포트 위치 (FC 모형 좌표, 앞쪽 = -z). 서보 레일은 뒤쪽 한 줄: RC IN, SBUS OUT, MAIN 1–8, AUX 1–6
   const FC_PORT = {
@@ -172,26 +181,44 @@
     g.userData.partId = part.id;
     objs[part.id] = o;
     if (part.type === "motor") {
-      g.add(cyl(0.0135, 0.008, M.dark, 0, 0.004, 0));
+      // 고정부: 알루미늄 베이스(냉각 슬롯) + 고정자 철심 + 구리 권선 12극
+      g.add(lathe([[0, 0.0005], [0.0128, 0.0005], [0.0137, 0.0018], [0.0137, 0.0058], [0.0128, 0.0074], [0.0102, 0.0086], [0.0046, 0.0092], [0, 0.0092]], M.aluLight));
+      for (let k = 0; k < 10; k++) { const a = (k / 10) * Math.PI * 2, v = box(0.0016, 0.0032, 0.0046, M.core, Math.cos(a) * 0.0134, 0.0036, Math.sin(a) * 0.0134); v.rotation.y = -a; g.add(v); }
+      g.add(cyl(0.0058, 0.011, M.core, 0, 0.0152, 0, 24));
+      for (let k = 0; k < 12; k++) { const a = (k / 12) * Math.PI * 2, t2 = new T.Group(); t2.rotation.y = a; t2.add(roundBox(0.0055, 0.0098, 0.0034, M.winding, 0.0084, 0.0152, 0, 0.0012)); g.add(t2); }
+      // 회전부(벨): 측면 회전체 + 스포크 창이 뚫린 윗판 + 색 링 + 축 + 너트
       const bell = new T.Group();
-      bell.add(cyl(0.014, 0.016, M.steel, 0, 0.017, 0), cyl(0.0142, 0.003, M.dark, 0, 0.0215, 0));
-      bell.add(cyl(0.0025, 0.012, M.steel, 0, 0.03, 0, 10));
+      bell.add(lathe([[0.0124, 0.0094], [0.0140, 0.0098], [0.0143, 0.0108], [0.0143, 0.0228], [0.0138, 0.0242], [0.0127, 0.0249]], M.alu, 64));
+      const top = new T.Shape(); top.absarc(0, 0, 0.0128, 0, Math.PI * 2, false);
+      for (let k = 0; k < 6; k++) { const a0 = (k / 6) * Math.PI * 2 + 0.16, a1 = a0 + Math.PI / 3 - 0.32, h = new T.Path(); h.absarc(0, 0, 0.0104, a0, a1, false); h.absarc(0, 0, 0.0056, a1, a0, true); h.closePath(); top.holes.push(h); }
+      const tg2 = new T.ExtrudeGeometry(top, { depth: 0.0008, bevelEnabled: true, bevelThickness: 0.0003, bevelSize: 0.0003, bevelSegments: 2, curveSegments: 40 }); tg2.rotateX(-Math.PI / 2);
+      const topM = new T.Mesh(tg2, M.alu); topM.position.y = 0.0241; topM.castShadow = topM.receiveShadow = true; bell.add(topM);
+      bell.add(lathe([[0.01445, 0.0112], [0.01445, 0.0128]], M.accent, 64));
+      bell.add(lathe([[0.0062, 0.0252], [0.0060, 0.0262], [0.0040, 0.0266], [0.0026, 0.0266]], M.alu, 40));
+      bell.add(cyl(0.0025, 0.012, M.steel, 0, 0.0305, 0, 20));
       // 축 나사 방향에 따라 너트 색이 다르다 (검정 / 은색)
-      bell.add(cyl(0.0055, 0.004, part.thread === "cw" ? M.dark : M.steel, 0, 0.0345, 0, 6));
+      const nutM = part.thread === "cw" ? M.dark : M.aluLight;
+      bell.add(cyl(0.0052, 0.0028, nutM, 0, 0.0336, 0, 6)); bell.add(lathe([[0.0046, 0], [0.0046, 0.0008], [0.0034, 0.0022], [0.0012, 0.0029], [0, 0.003]], nutM, 24).translateY(0.035));
       // X자 장착 플랜지 (나사 구멍 4개)
-      for (const a of [Math.PI / 4, -Math.PI / 4]) { const f = box(0.04, 0.0025, 0.007, M.dark, 0, 0.00125, 0); f.rotation.y = a; g.add(f); }
+      for (const a of [Math.PI / 4, -Math.PI / 4]) { const f = roundBox(0.041, 0.0026, 0.0078, M.dark, 0, 0.0013, 0, 0.0035); f.rotation.y = a; g.add(f); }
+      for (const a of [Math.PI / 4, 3 * Math.PI / 4, 5 * Math.PI / 4, 7 * Math.PI / 4]) { const sx = Math.cos(a) * 0.0175, sz = Math.sin(a) * 0.0175; g.add(cyl(0.0017, 0.0012, M.steel, sx, 0.0031, sz, 16)); g.add(cyl(0.0008, 0.0006, M.dark, sx, 0.0037, sz, 6)); }
+      g.add(cyl(0.0034, 0.008, M.dark, 0, 0.004, -0.0125, 16).rotateX(Math.PI / 2)); // 출력선 수축 튜브
       ["y", "b", "g"].forEach((c, k) => lead(o, "ph" + (k + 1), [(k - 1) * 0.004, 0.004, -0.012], [(k - 1) * 0.006, 0.003, -0.021], LEAD[c], 0.0011));
       g.add(bell); o.spinner = bell;
     } else if (part.type === "prop") {
       const sp = new T.Group(), s = part.dir === "ccw" ? 1 : -1, geo = bladeGeo(s);
-      const b1 = new T.Mesh(geo, M.prop), b2 = new T.Mesh(geo, M.prop); b1.castShadow = b2.castShadow = true; b2.rotation.y = Math.PI; b1.userData.plate = b2.userData.plate = true; // 얇은 날개는 아래 부품 클릭을 가리지 않는다
-      sp.add(b1, b2, cyl(0.0095, 0.009, M.dark, 0, 0.0045, 0, 28), cyl(0.0035, 0.0012, M.steel, 0, 0.0094, 0, 20), box(0.018, 0.002, 0.006, M.steel, 0, 0.0095, 0)); // 프로펠러 브라켓
+      const b1 = new T.Mesh(geo, M.propC), b2 = new T.Mesh(geo, M.propC); b1.castShadow = b2.castShadow = true; b2.rotation.y = Math.PI; b1.userData.plate = b2.userData.plate = true; // 얇은 날개는 아래 부품 클릭을 가리지 않는다
+      sp.add(b1, b2); // 허브: 선반 가공 몸통 + 날개 뿌리 + 알루미늄 클램프
+      sp.add(lathe([[0, 0], [0.0088, 0], [0.0098, 0.001], [0.0098, 0.0078], [0.0086, 0.009], [0.0036, 0.0092], [0.0036, 0.0098], [0, 0.0098]], M.plastic, 40));
+      for (const rot of [0, Math.PI]) { const sh = cyl(0.0032, 0.012, M.plastic, 0, 0, 0, 16); sh.rotation.z = Math.PI / 2; const hg2 = new T.Group(); hg2.rotation.y = rot; sh.position.set(0.012, 0.0045, 0); hg2.add(sh); sp.add(hg2); }
+      sp.add(roundBox(0.02, 0.0022, 0.0072, M.aluLight, 0, 0.0104, 0, 0.0028)); // 프로펠러 브라켓
+      for (const x of [-0.0068, 0.0068]) sp.add(cyl(0.0012, 0.0008, M.dark, x, 0.0118, 0, 6));
       // 날개 윗면 인쇄: 규격(길이 2자리 + 피치 2자리)과 회전 방향 — 확대해야 읽힌다
       const txt = "2408 " + part.dir.toUpperCase();
       for (const rot of [0, Math.PI]) {
         const r = 0.066, th = bladeTwist(s, r), lb = nameplate(txt, 0.034, 0.006, null, "#e8ecec");
         const holder = new T.Group(); holder.rotation.y = rot; sp.add(holder);
-        lb.rotation.x = -Math.PI / 2 + th; lb.position.set(r, 0.004 + 0.0013 * Math.cos(th), 0.0013 * Math.sin(th) + 0.001);
+        const off = 0.0031; lb.rotation.x = -Math.PI / 2 + th; lb.position.set(r, 0.004 + off * Math.cos(th), off * Math.sin(th));
         holder.add(lb);
       }
       const disc = new T.Mesh(new T.CircleGeometry(0.12, 40), new T.MeshBasicMaterial({ color: 0x9aa6a8, transparent: true, opacity: 0, side: T.DoubleSide, depthWrite: false }));
