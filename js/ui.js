@@ -527,6 +527,7 @@
     if (ui.pdbView && (F.active || !SIM.has("frameBot"))) ui.pdbView = false;
     if (ui.rxView && F.active) ui.rxView = false;
     const rv = $("#rxview"); rv.hidden = !ui.rxView; if (ui.rxView) rv.innerHTML = rxViewHtml();
+    if (!ui.fcView && !ui.pdbView && !ui.rxView && !SIM.scene.anim && SIM.scene.restoreCam) SIM.scene.restoreCam(); // 세부 화면을 닫으면 원래 시점으로
     const pv = $("#pdbview"); pv.hidden = !ui.pdbView; if (ui.pdbView) pv.innerHTML = pdbViewHtml();
     const fv = $("#fcview"); fv.hidden = !ui.fcView; if (ui.fcView) fv.innerHTML = fcViewHtml();
     const tv = $("#txview"); tv.hidden = !ui.txView || F.active; if (!tv.hidden) tv.innerHTML = txHtml();

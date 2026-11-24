@@ -10,7 +10,7 @@
   const restY = () => (SIM.has("skid") ? REST_Y : SIM.has("under") ? 0.05 * K : 0.018 * K);
   // 부품별 모형 배율 (프레임 대비 잘 보이도록 키움)
   const PS = { bottom: 1, top: 1, arm: 1, skid: 1, motor: 2.0, prop: 1.2, esc: 1.55, fc: 1.75, pm: 1.7, battery: 1.3, gps: 1.6, rx: 1.95, telem: 1.85, buzzer: 2.4, switch: 2.4 };
-  let composer, gtao, bloom, hemi, hdri = {};
+  let composer, gtao, bloom, hemi, hdri = {}, livePlug = null;
   let renderer, scene, camera, drone, benchGroup, fieldGroup, partsRoot, wires, expectGroup, selBox, sun, snapRing, liveWire, stageEl;
   const air = {}, targets = [];
   const orbit = (sc.orbit = { theta: 0.3, phi: 0.86, dist: 2.75 * KS, target: new T.Vector3(0, 0.2 * KS, 0.16 * KS) });
@@ -968,7 +968,7 @@ const BIND_MSG = { held: "바인드 버튼을 누르고 있습니다. 이 상태
     sc.camGoal = { target: c, dist: 0.75 * KS, phi: 0.42, theta: Math.PI }; sc.fcZoom = true; // 앞쪽 위에서 내려다보아 뒤쪽 GPS에 가리지 않게
   }
   function restoreCam() { if (sc.camPrev) { sc.camGoal = sc.camPrev; sc.camPrev = null; } sc.fcZoom = false; }
-  sc.cancelPick = () => { if (sc.fcZoom) restoreCam(); sc.pick = null; sc.wireDrag = false; if (liveWire) { liveWire.geometry.dispose(); drone.remove(liveWire); liveWire = null; } if (sc.onHover) sc.onHover(""); };
+  sc.cancelPick = () => { if (sc.fcZoom) restoreCam(); sc.pick = null; sc.wireDrag = false; sc._lastWire = null; if (livePlug) livePlug.visible = false; if (liveWire) { liveWire.geometry.dispose(); drone.remove(liveWire); liveWire = null; } if (sc.onHover) sc.onHover(""); };
   function startPick(tip) {
     disconnect(tip);
     sc.pick = tip;
@@ -1018,15 +1018,12 @@ const BIND_MSG = { held: "바인드 버튼을 누르고 있습니다. 이 상태
       const c = tipCable(tip);
       if (!c) return say("이 선은 FC에 꽂지 않습니다.");
       if (SIM.has("canopy") && /^deck:/.test(SIM.state.install.fc || "")) return say("케이스를 먼저 벗기세요.");
-      sc.cancelPick(); if (sc.onFcCable) sc.onFcCable(c, true); SIM.emit();
-      return;
+      return approach(tg, null, () => { if (sc.onFcCable) sc.onFcCable(c, true); });
     } else if (tg.kind === "rxDetail") {
-      sc.cancelPick(); if (sc.onRxCable) sc.onRxCable(); SIM.emit();
-      return;
+      return approach(tg, null, () => { if (sc.onRxCable) sc.onRxCable(); });
     } else if (tg.kind === "pdb") { // 하판에 꽂는 선을 든 채 하판을 누르면 PDB 세부 보기에서 자리를 고른다
       if (!pdbCable(tip)) return say("이 선은 하판(PDB)에 꽂지 않습니다.");
-      sc.cancelPick(); if (sc.onPdbCable) sc.onPdbCable(tip); SIM.emit();
-      return;
+      return approach(tg, null, () => { if (sc.onPdbCable) sc.onPdbCable(tip); });
     }
     sc.cancelPick(); SIM.emit();
   }
@@ -1040,8 +1037,38 @@ const BIND_MSG = { held: "바인드 버튼을 누르고 있습니다. 이 상태
     if (liveWire) { liveWire.geometry.dispose(); drone.remove(liveWire); }
     const a = tipPos(sc.pick.part, sc.pick.key), b = drone.worldToLocal(worldPoint.clone()), lift = Math.max(a.y, b.y) + 0.01;
     liveWire = tube([a, new T.Vector3((a.x + b.x) / 2, lift, (a.z + b.z) / 2), b], 0xffd45e, 0.0014);
-    drone.add(liveWire);
+    drone.add(liveWire); sc._lastWire = worldPoint.clone();
+    // 선 끝 커넥터: 들고 가는 플러그 (XT60은 노란색, 신호선은 흰 하우징)
+    const xt = pdbCable(sc.pick);
+    if (!livePlug || livePlug.userData.xt !== xt) { if (livePlug) drone.remove(livePlug); livePlug = new T.Mesh(new T.BoxGeometry(xt ? 0.008 : 0.006, xt ? 0.0055 : 0.003, xt ? 0.0075 : 0.004), xt ? M.yellow : M.housing); livePlug.userData.xt = xt; livePlug.raycast = () => {}; drone.add(livePlug); }
+    livePlug.position.copy(b); livePlug.visible = true;
+    const dir = b.clone().sub(new T.Vector3((a.x + b.x) / 2, lift, (a.z + b.z) / 2)); livePlug.rotation.set(0, Math.atan2(dir.x, dir.z), 0);
   }
+  // 선을 든 채 FC·하판·수신기를 누르면: 커넥터가 선을 끌고 그곳으로 다가가고 카메라도 따라 다가간 뒤 세부 화면을 연다
+  function approach(tg, point, done) {
+    const tip = sc.pick, o = objs[tip.part];
+    let to = point ? point.clone() : null;
+    const top = (id) => { const bb = new T.Box3().setFromObject(objs[id].group), c = bb.getCenter(new T.Vector3()); c.y = bb.max.y + 0.01 * K; return c; };
+    if (tg.kind === "fc" || (tg.kind === "rxDetail" && SIM.state.install.fc && tip.key === "sig")) to = top("fc");
+    else if (tg.kind === "pdb" && (tip.key === "out" || tip.key === "xt")) to = objs.frameBot.group.localToWorld(PDB_MAIN.clone());
+    else if (tg.kind === "pmIn") to = objs.pm.group.localToWorld(objs.pm.pads.in.clone());
+    if (!to) to = top(tg.part && objs[tg.part] ? tg.part : tip.part);
+    const from = sc._lastWire ? sc._lastWire.clone() : o.group.localToWorld(o.tips[tip.key].clone());
+    if (!sc.camPrev) sc.camPrev = { target: orbit.target.clone(), dist: orbit.dist, phi: orbit.phi, theta: orbit.theta };
+    sc.camGoal = { target: to.clone(), dist: Math.min(orbit.dist, 0.9 * KS), phi: Math.min(orbit.phi, 0.7), theta: orbit.theta };
+    sc.detailCam = true; sc.anim = { t: 0, dur: 0.85, from, to, done }; sc._keep = true; sc.wireDrag = false;
+    snapRing.visible = true; snapRing.position.copy(to);
+    if (sc.onHover) sc.onHover("");
+  }
+  function stepApproach(dt) {
+    const A = sc.anim; if (!A) return;
+    A.t += dt; const u = Math.min(1, A.t / A.dur), e2 = u * u * (3 - 2 * u);
+    const pnt = A.from.clone().lerp(A.to, e2); pnt.y += Math.sin(Math.PI * e2) * 0.05 * K; // 들어 올렸다가 내려놓는 궤적
+    drawLiveWire(pnt, null);
+    snapRing.scale.setScalar(1 + 0.25 * Math.sin(A.t * 14)); // 도착 지점 표시
+    if (u >= 1) { sc.anim = null; snapRing.visible = false; snapRing.scale.setScalar(1); const d = A.done; sc.cancelPick(); d(); SIM.emit(); }
+  }
+  sc.restoreCam = () => { if (sc.detailCam) { sc.detailCam = false; restoreCam(); } };
 
   // ---------- 조작: 회전·확대, 부품 끌기, 선 연결 ----------
   function bindPointer(canvas) {
@@ -1119,11 +1146,13 @@ const BIND_MSG = { held: "바인드 버튼을 누르고 있습니다. 이 상태
     sc._pickAt = pickAt; // 점검용
 
     canvas.addEventListener("pointerdown", (e) => {
+      if (sc.anim) return; // 다가가는 동작 중에는 입력을 받지 않는다
       canvas.setPointerCapture(e.pointerId); pts.set(e.pointerId, { x: e.clientX, y: e.clientY }); moved = 0; pinch = 0;
       down = null;
       if (pts.size === 1 && canEdit() && !sc.pick && !sc.held) { const h = pickAt(e); if (h.tip) down = { tip: h.tip }; else if (h.part) down = { id: h.part }; }
     });
     canvas.addEventListener("pointermove", (e) => {
+      if (sc.anim) return;
       const p = pts.get(e.pointerId);
       if (!p) { // 버튼을 누르지 않은 이동: 커서 모양과 연결 미리보기
         if (!canEdit()) return;
@@ -1206,6 +1235,7 @@ const BIND_MSG = { held: "바인드 버튼을 누르고 있습니다. 이 상태
       else { const t = objs[d.id].group.userData.tp; SIM.placeOnBench(d.id, +t.x.toFixed(3), +t.z.toFixed(3)); }
     }
     const up = (e) => {
+      if (sc.anim) { pts.delete(e.pointerId); return; }
       pts.delete(e.pointerId);
       if (sc.drag) { dragEnd(); down = null; return; }
       if (sc.wireDrag) { // 끌던 선을 놓은 자리
@@ -1248,7 +1278,7 @@ const BIND_MSG = { held: "바인드 버튼을 누르고 있습니다. 이 상태
     canvas.addEventListener("pointerup", up); canvas.addEventListener("pointercancel", up);
     canvas.addEventListener("dblclick", (e) => { if (!pickAt(e).part) sc.home(); });
     canvas.addEventListener("wheel", (e) => { e.preventDefault(); orbit.dist = clampDist(orbit.dist * Math.exp(e.deltaY * 0.001)); }, { passive: false });
-    window.addEventListener("keydown", (e) => { if (e.key === "Escape") { if (sc.pick) { sc.cancelPick(); SIM.emit(); } if (sc.held) setHeld(null); } });
+    window.addEventListener("keydown", (e) => { if (e.key === "Escape" && !sc.anim) { if (sc.pick) { sc.cancelPick(); SIM.emit(); } if (sc.held) setHeld(null); } });
   }
   const clampDist = (d) => Math.min(sc.env === "field" ? 60 : 7 * KS, Math.max(0.35, d));
   sc.zoom = (f) => { orbit.dist = clampDist(orbit.dist * f); };
@@ -1278,6 +1308,7 @@ const BIND_MSG = { held: "바인드 버튼을 누르고 있습니다. 이 상태
     if (orbit.target.distanceTo(gl.target) < 0.002 && Math.abs(gl.dist - orbit.dist) < 0.002 && Math.abs(gl.phi - orbit.phi) < 0.002) sc.camGoal = null;
   }
   sc.update = function (dt, skipRender) {
+    stepApproach(dt);
     tweenCam(dt);
     adaptQuality(dt);
     const k = 1 - Math.exp(-12 * dt);
