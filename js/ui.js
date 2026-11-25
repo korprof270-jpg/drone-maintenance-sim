@@ -54,7 +54,7 @@
     if (slot) {
       if (p.type === "motor") for (let k = 1; k <= 3; k++) leads += row("선 " + "①②③"[k - 1], w.motorWires[pos][k] && SIM.has("esc@" + pos) ? "ESC 단자 " + w.motorWires[pos][k] : "");
       if (p.type === "esc") leads += row("전원 커넥터", SIM.escPowered(pos) ? "PDB " + SIM.xtName(w.escPwr[pos]) : "") + row("신호선", w.plug["esc" + pos]) + row("통신선", w.escTelem[pos] ? "하네스" : "");
-      if (p.type === "pm") leads += row("FC 케이블", w.plug.pm) + row("출력 XT60", w.pmOut ? "PDB 주전원" : "") + row("입력", w.batt === "pm" && SIM.has("battery") ? "배터리" : "");
+      if (p.type === "pm") leads += row("FC 케이블", w.plug.pm) + row("출력 XT60", w.pmOut === "ok" ? "PDB 주전원" : /^xt/.test(w.pmOut) ? "PDB " + SIM.xtName(w.pmOut) : "") + row("입력", w.batt === "pm" && SIM.has("battery") ? "배터리" : "");
       if (p.type === "battery") leads += row("커넥터", w.batt === "pm" ? "PMU 입력" : w.batt === "pdb" ? "PDB 패드" : "");
       if (p.type === "gps") leads += row("굵은 선", w.plug.gps) + row("가는 선", w.plug.compass);
       if (["telem", "buzzer", "switch"].includes(p.type)) leads += row("케이블", w.plug[id]);
@@ -228,13 +228,15 @@
       list.push({ id: "pwr:" + pos, name: n + " ESC 전원선 (XT60M)", ready: has, at: has && w.escPwr[pos] ? SIM.xtName(w.escPwr[pos]) : "" });
     }
     for (const pos of SIM.POS_IDS) { const has = SIM.has("esc@" + pos); list.push({ id: "tel:" + pos, name: SIM.POS[pos].name + " ESC 통신선", ready: has, at: has && w.escTelem[pos] === "harness" ? "하네스" : "" }); }
-    list.push({ id: "pmout", name: "PMU 출력선 (XT60M)", ready: SIM.has("pm"), at: SIM.has("pm") && w.pmOut === "ok" ? "MAIN" : "" });
+    list.push({ id: "pmout", name: "PMU 출력선 (XT60M)", ready: SIM.has("pm"), at: SIM.has("pm") && w.pmOut === "ok" ? "MAIN" : SIM.has("pm") && /^xt/.test(w.pmOut) ? SIM.xtName(w.pmOut) : "" });
     list.push({ id: "batt", name: "배터리 선 (XT60M)", ready: SIM.has("battery"), at: SIM.has("battery") && w.batt === "pdb" ? "MAIN" : SIM.has("battery") && w.batt === "pm" ? "PMU 입력" : "" });
     return list;
   }
   function pdbViewHtml() {
     const w = SIM.state.wiring, sel = ui.pdbSel || "", kind = sel.split(":")[0];
     const xtUser = {}; for (const pos in w.escPwr) if (w.escPwr[pos] && SIM.has("esc@" + pos)) xtUser[w.escPwr[pos]] = pos;
+    if (SIM.has("pm") && /^xt/.test(w.pmOut)) xtUser[w.pmOut] = "PMU";
+    const uName = (u) => (u === "PMU" ? "PMU" : SIM.POS[u].name);
     const mainUser = SIM.has("pm") && w.pmOut === "ok" ? "PMU 출력" : SIM.has("battery") && w.batt === "pdb" ? "배터리" : "";
     const tels = SIM.POS_IDS.filter((p) => SIM.has("esc@" + p) && w.escTelem[p] === "harness");
     const g = (arg, cls, label, inner) => '<g class="port' + cls + '" data-act="pdbSlot" data-arg="' + arg + '" tabindex="0" role="button" aria-label="' + label + '">' + inner + "</g>";
@@ -245,9 +247,9 @@
       const [cx, cy] = PDB_XY[pos];
       s += '<text class="plabel" x="' + cx + '" y="' + (SIM.POS[pos].z < 0 ? cy + 30 : cy - 26) + '">' + SIM.POS[pos].name + "</text>";
       SIM.XT_OF[pos].forEach((xt, i) => {
-        const x = cx - 42 + i * 48, y = cy - 18, u = xtUser[xt], fitc = kind === "pwr" ? (sel.split(":")[1] === pos ? " fit" : " far") : "";
-        s += g(xt, (u ? " used" : "") + fitc, "PDB " + SIM.xtName(xt) + (u ? ", " + SIM.POS[u].name + " ESC 연결됨" : ""),
-          '<rect class="sock xt" x="' + x + '" y="' + y + '" width="36" height="28" rx="4"/><text class="plabel dark" x="' + (x + 18) + '" y="' + (y + 18) + '">' + xt.slice(2) + "</text>" + (u ? '<text class="pcable" x="' + (x + 18) + '" y="' + (y + 42) + '">' + esc(SIM.POS[u].name) + "</text>" : ""));
+        const x = cx - 42 + i * 48, y = cy - 18, u = xtUser[xt], fitc = kind === "pwr" ? (sel.split(":")[1] === pos ? " fit" : " far") : kind === "pmout" && !u ? " fit" : "";
+        s += g(xt, (u ? " used" : "") + fitc, "PDB " + SIM.xtName(xt) + (u ? ", " + uName(u) + (u === "PMU" ? " 출력" : " ESC") + " 연결됨" : ""),
+          '<rect class="sock xt" x="' + x + '" y="' + y + '" width="36" height="28" rx="4"/><text class="plabel dark" x="' + (x + 18) + '" y="' + (y + 18) + '">' + xt.slice(2) + "</text>" + (u ? '<text class="pcable" x="' + (x + 18) + '" y="' + (y + 42) + '">' + esc(uName(u)) + "</text>" : ""));
       });
     }
     // ESC 통신선 하네스 (앞쪽)
@@ -261,7 +263,7 @@
     for (const c of pdbCables()) tray += '<button type="button" class="cable' + (sel === c.id ? " on" : "") + '" data-act="pdbCable" data-arg="' + c.id + '"' + (c.ready ? "" : " disabled") + ">" + (c.id.startsWith("tel") ? plugGlyph("df6") : XT_GLYPH) + "<span>" + esc(c.name) + '</span><span class="chip ' + (c.at ? "ok" : "") + '">' + (!c.ready ? "부품 없음" : c.at || "미연결") + "</span></button>";
     tray += "</div>";
     const name = (pdbCables().find((c) => c.id === sel) || {}).name;
-    const hint = sel ? '<p class="fchint"><b>' + esc(name) + "</b>을(를) 꽂을 자리를 누르세요." + (kind === "pwr" ? " ESC 전원선은 짧아서 자기 붐대 옆 커넥터에만 닿습니다." : "") + "</p>" : '<p class="fchint">오른쪽에서 선을 고른 뒤 자리를 누르세요. 꽂힌 자리를 누르면 뽑힙니다.</p>';
+    const hint = sel ? '<p class="fchint"><b>' + esc(name) + "</b>을(를) 꽂을 자리를 누르세요." + (kind === "pwr" ? " ESC 전원선은 짧아서 자기 붐대 옆 커넥터에만 닿습니다." : kind === "pmout" ? " PMU 출력은 MAIN 또는 비어 있는 XT60 단자에 꽂을 수 있습니다." : "") + "</p>" : '<p class="fchint">오른쪽에서 선을 고른 뒤 자리를 누르세요. 꽂힌 자리를 누르면 뽑힙니다.</p>';
     return '<div class="fchead"><h2>하판 · PDB 커넥터 배치</h2>' + btn("pdbClose", "닫기") + "</div>" + hint + '<div class="fcbody">' + s + tray + "</div>";
   }
 
@@ -350,6 +352,7 @@
       else if (type === "plug") { click(0, 3200, 0.025, 1.2); tone(2200, 0.004, 0.03, "triangle", 0.25); }
       else if (type === "xt") { click(0, 2000, 0.03, 1.2); click(0.06, 2600, 0.035, 1.3); tone(420, 0.06, 0.06, "square", 0.08); }
       else if (type === "powerup") { [880, 1109, 1319].forEach((f, i) => tone(f, i * 0.14, 0.12, "triangle", 0.3)); tone(1319, 0.8, 0.09, "triangle", 0.25); tone(1319, 1.0, 0.09, "triangle", 0.25); }
+      else if (type === "escbeep") { tone(1760, 0, 0.16, "sine", 0.45); tone(880, 0, 0.16, "triangle", 0.12); } // 모터 권선에서 나는 ESC 경고음
       else if (type === "bind") { tone(1400, 0, 0.09, "sine", 0.4); tone(2100, 0.11, 0.14, "sine", 0.4); }
     } catch (e) {}
   };
@@ -595,7 +598,7 @@
       const w = SIM.state.wiring, sel = ui.pdbSel, [kind, pos] = (sel || "").split(":");
       const done = (snd) => { ui.pdbSel = null; SIM.sfx(snd); if (ui.pdbAuto) ui.pdbView = false; SIM.emit(); };
       if (!sel) { // 고른 선이 없으면 그 자리에 꽂힌 선을 뽑는다
-        if (/^xt/.test(a)) { const u = Object.keys(w.escPwr).find((p) => w.escPwr[p] === a); if (u) { w.escPwr[u] = ""; return SIM.emit(); } }
+        if (/^xt/.test(a)) { if (w.pmOut === a) { w.pmOut = ""; return SIM.emit(); } const u = Object.keys(w.escPwr).find((p) => w.escPwr[p] === a); if (u) { w.escPwr[u] = ""; return SIM.emit(); } }
         else if (a === "main") { if (w.pmOut === "ok") { w.pmOut = ""; return SIM.emit(); } if (w.batt === "pdb") { w.batt = ""; return SIM.emit(); } }
         else if (a === "harness") { const u = SIM.POS_IDS.filter((p) => w.escTelem[p] === "harness"); if (u.length) { u.forEach((p) => (w.escTelem[p] = "")); return SIM.emit(); } }
         return SIM.toast("먼저 꽂을 선을 고르세요.");
@@ -606,6 +609,7 @@
         SIM.setEscXt(pos, a); return done("xt");
       }
       if (kind === "tel") { if (a !== "harness") return SIM.toast("커넥터가 맞지 않습니다.", "bad"); w.escTelem[pos] = "harness"; return done("plug"); }
+      if (kind === "pmout" && /^xt/.test(a)) { SIM.setPmXt(a); return done("xt"); } // PMU 출력은 빈 XT60F 단자에도 꽂을 수 있다
       if (kind === "pmout" || kind === "batt") {
         if (a !== "main") return SIM.toast("커넥터가 맞지 않습니다.", "bad");
         if (kind === "pmout") { w.pmOut = "ok"; if (w.batt === "pdb") w.batt = ""; } else { w.batt = "pdb"; if (w.pmOut === "ok") w.pmOut = ""; }

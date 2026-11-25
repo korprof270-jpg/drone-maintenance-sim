@@ -108,7 +108,11 @@
   SIM.XT_OF = { FR: ["xt1", "xt2"], RR: ["xt3", "xt4"], RL: ["xt5", "xt6"], FL: ["xt7", "xt8"] };
   SIM.xtName = (x) => "XT60 " + x.slice(2);
   SIM.escPowered = (pos) => /^xt/.test(SIM.state.wiring.escPwr[pos] || "");
-  SIM.setEscXt = (pos, xt) => { const w = SIM.state.wiring; if (xt) for (const p in w.escPwr) if (w.escPwr[p] === xt) w.escPwr[p] = ""; w.escPwr[pos] = xt; SIM.emit(); };
+  SIM.setEscXt = (pos, xt) => { const w = SIM.state.wiring; if (xt) { for (const p in w.escPwr) if (w.escPwr[p] === xt) w.escPwr[p] = ""; if (w.pmOut === xt) w.pmOut = ""; } w.escPwr[pos] = xt; SIM.emit(); };
+  // PMU 출력선을 PDB의 빈 XT60F 단자에 꽂기 (PDB 전원으로 PMU가 켜져 FC에 전원·전압을 준다)
+  SIM.setPmXt = (xt) => { const w = SIM.state.wiring; for (const p in w.escPwr) if (w.escPwr[p] === xt) w.escPwr[p] = ""; w.pmOut = xt; if (xt === "ok" && w.batt === "pdb") w.batt = ""; SIM.emit(); };
+  // ESC가 받는 신호: FC가 켜져 있고 신호선이 FC 출력 포트(MAIN/AUX OUT)에 꽂혀 있어야 한다
+  SIM.escSignal = (pos) => { const w = SIM.state.wiring, port = w.plug["esc" + pos] || ""; return SIM.power().fcBatt && SIM.cableReady("esc" + pos) && /OUT \d/.test(port) && port !== "SBUS OUT"; };
 
   // FC 6핀 포트 ↔ 시리얼 번호
   SIM.SERIAL_OF = { TELEM1: 1, TELEM2: 2, GPS: 3, "SERIAL 4/5": 4 };
@@ -196,7 +200,7 @@
         escTelem: { FR: "", RR: "", RL: "", FL: "" }, // ESC 통신선 → "harness" 
         batt: "", // 배터리 커넥터: "", "pm", "pdb"
         rxEnd: "", rxRevRx: false, rxRevFc: false, // 수신기 3선 커넥터: 수신기 쪽 핀("1"…"8", "SB")과 양쪽 방향
-        pmOut: "", // PMU 출력 XT60M → PDB 주전원 XT60F: "", "ok"
+        pmOut: "", // PMU 출력 XT60M → PDB: "" / "ok"(주전원 MAIN) / "xt1"…"xt8"(빈 XT60F 단자)
       },
       params,
       cal: { accel: false, compass: false, radio: false, esc: false },
@@ -342,9 +346,11 @@
     const st = SIM.state, w = st.wiring, batt = SIM.has("battery"), pm = SIM.has("pm"), fc = SIM.has("fc");
     const viaPm = batt && pm && w.batt === "pm";
     const reverse = viaPm && w.pmOut === "rev";
-    const pdb = SIM.has("frameBot") && ((viaPm && w.pmOut === "ok") || (batt && w.batt === "pdb"));
-    const fcBatt = fc && viaPm && w.plug.pm === "POWER";
-    return { pdb, main: pdb, reverse, fc, fcBatt, battSense: fcBatt && st.params.BATT_MONITOR !== 0 };
+    const pmToPdb = pm && SIM.has("frameBot") && (w.pmOut === "ok" || /^xt/.test(w.pmOut));
+    const pdb = SIM.has("frameBot") && batt && ((viaPm && pmToPdb) || w.batt === "pdb");
+    const pmOn = pm && batt && (viaPm || (pmToPdb && pdb)); // PMU는 배터리 쪽에서든 PDB 쪽에서든 전원을 받으면 켜진다
+    const fcBatt = fc && pmOn && w.plug.pm === "POWER";
+    return { pdb, main: pdb, reverse, fc, pmOn, fcBatt, battSense: fcBatt && st.params.BATT_MONITOR !== 0 };
   };
   SIM.gpsOk = () => SIM.has("gps") && SIM.serialProto(SIM.state.wiring.plug.gps) === 5;
   SIM.telemOk = () => SIM.has("telem") && [1, 2].includes(SIM.serialProto(SIM.state.wiring.plug.telem));
@@ -373,7 +379,11 @@
     const now = Date.now(), powered = SIM.rxPowered(), fc = SIM.power().fcBatt;
     if (powered && !SIM._rxWas && SIM.state.bindHeld) { SIM.state.bindHeld = false; SIM.binding = now; SIM.bindUntil = now + 10000; }
     if (SIM._fcWas && !fc && SIM.state.needReboot) { SIM.state.needReboot = false; }
-    const pdbNow = SIM.power().pdb; if (pdbNow && !SIM._pdbWas && SIM.sfx) SIM.sfx("powerup"); SIM._pdbWas = pdbNow; // 전원이 들어오면 ESC 시작음
+    const pdbNow = SIM.power().pdb; if (pdbNow && !SIM._pdbWas) { if (SIM.sfx) SIM.sfx("powerup"); SIM._pdbOnAt = now; } SIM._pdbWas = pdbNow; // 전원이 들어오면 ESC 시작음
+    // ESC 경고음: 전원은 들어왔는데 FC 신호가 없거나 ESC 캘리브레이션이 안 된 ESC가 있으면 '삑…삑…' (모터가 돌 때는 멈춤)
+    SIM.escWarn = pdbNow && SIM.POS_IDS.some((p) => SIM.has("esc@" + p) && SIM.escPowered(p) && (!SIM.escSignal(p) || !SIM.state.cal.esc));
+    const spinning = SIM.motorU && SIM.POS_IDS.some((p) => (SIM.motorU[p] || 0) > 0.02);
+    if (SIM.escWarn && !spinning && now - (SIM._pdbOnAt || 0) > 2200 && now - (SIM._beepT || 0) > 1700) { SIM._beepT = now; if (SIM.sfx) SIM.sfx("escbeep"); }
     SIM._rxWas = powered; SIM._fcWas = fc;
     if (!SIM.bindUntil) return;
     if (!powered || now > SIM.bindUntil) { SIM.binding = 0; SIM.bindUntil = 0; SIM.emit(); return; }
@@ -481,12 +491,13 @@
     else add("ok", "FC 장착 방향", st.rot.fc ? "돌려 달았지만 AHRS_ORIENTATION으로 보정됨" : "화살표가 앞쪽");
     if (!SIM.has("battery")) add("bad", "배터리", "장착되지 않았습니다.");
     else if (!w.batt) add("bad", "배터리 커넥터", "연결되지 않았습니다.");
-    else if (w.batt === "pdb") add("bad", "배터리 커넥터", "PDB에 직접 연결되어 PMU을 거치지 않습니다. FC에 전원과 전압 정보가 가지 않습니다.");
+    else if (w.batt === "pdb") add(/^xt/.test(w.pmOut) ? "warn" : "bad", "배터리 커넥터", /^xt/.test(w.pmOut) ? "PDB 주전원에 직접 연결되어 PMU를 거치지 않습니다. 전압은 측정되지만 전체 전류는 측정되지 않습니다." : "PDB에 직접 연결되어 PMU를 거치지 않습니다. FC에 전원과 전압 정보가 가지 않습니다.");
     else add("ok", "배터리 커넥터", "PMU 입력");
     if (!SIM.has("pm")) add("bad", "PMU", "장착되지 않았습니다.");
     else {
-      if (!w.pmOut) add("bad", "PMU 출력 커넥터", "XT60이 PDB 주전원에 꽂혀 있지 않습니다.");
-      else add("ok", "PMU 출력 커넥터", "PDB 주전원 XT60");
+      if (!w.pmOut) add("bad", "PMU 출력 커넥터", "XT60이 PDB에 꽂혀 있지 않습니다.");
+      else if (w.pmOut === "ok") add("ok", "PMU 출력 커넥터", "PDB 주전원 XT60");
+      else add(w.batt === "pdb" ? "ok" : "warn", "PMU 출력 커넥터", "PDB " + SIM.xtName(w.pmOut) + " 단자" + (w.batt === "pdb" ? "" : " (배터리가 PMU를 거치면 출력은 PDB 주전원에 꽂아야 합니다)"));
       if (w.plug.pm !== "POWER") add("bad", "PMU 케이블", w.plug.pm ? w.plug.pm + " 포트에 꽂혀 있습니다. POWER 포트여야 합니다." : "FC에 연결되지 않았습니다.");
       else add("ok", "PMU 케이블", "POWER 포트");
     }

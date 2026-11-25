@@ -250,7 +250,7 @@
       // 아래 케이스(플라스틱) + 위 덮개(아노다이징 알루미늄) + 상태 LED 창 + 옆 통풍구 + microSD
       g.add(roundBox(0.05, 0.0092, 0.082, M.plastic, 0, 0.0046, 0, 0.006));
       g.add(roundBox(0.0472, 0.0062, 0.0792, M.lid, 0, 0.0119, 0, 0.0055));
-      g.add(roundBox(0.012, 0.0008, 0.005, M.glow(0x3b8cff), 0.0, 0.0151, -0.024, 0.0018));
+      g.add(roundBox(0.012, 0.0008, 0.005, (o.statusMat = M.glow(0x3b8cff)), 0.0, 0.0151, -0.024, 0.0018));
       for (const sx of [-1, 1]) for (let k = 0; k < 7; k++) g.add(box(0.0006, 0.0028, 0.0035, M.slot, sx * 0.0251, 0.0048, -0.024 + k * 0.006));
       g.add(box(0.008, 0.0014, 0.0008, M.aluLight, 0.012, 0.004, -0.0411));
       target(g, mesh(new T.BoxGeometry(0.03, 0.017, 0.06), HIT, 0, 0.0075, 0.002), { kind: "fc", part: part.id, label: "비행 컨트롤러" });
@@ -302,7 +302,7 @@
       g.add(roundBox(0.009, 0.008, 0.009, M.alu, 0, 0.026, 0, 0.002)); { const kp = cyl(0.0014, 0.011, M.steel, 0, 0.026, 0, 12); kp.rotation.z = Math.PI / 2; g.add(kp); }
       g.add(lathe([[0, 0.068], [0.0065, 0.068], [0.0065, 0.071], [0, 0.071]], M.alu, 24));
       g.add(lathe([[0, 0.07], [0.0295, 0.07], [0.0305, 0.0715], [0.0305, 0.075], [0.029, 0.0775], [0.024, 0.0805], [0.014, 0.0822], [0, 0.0826]], M.plastic, 64));
-      g.add(lathe([[0.0306, 0.0718], [0.0306, 0.0732]], M.glow(0x37d67a), 64));
+      g.add(lathe([[0.0306, 0.0718], [0.0306, 0.0732]], (o.ringMat = M.glow(0x37d67a)), 64));
       const d = arrowDecal(0.026, 0.038, "GPS", "#1b1e22"); d.position.y = 0.0829; g.add(d);
       // 마스트 아래에서 양옆으로 나와 FC에 가리지 않는 케이블 끝 (굵은 6핀 / 가는 4핀)
       lead(o, "gps", [0.003, 0.006, 0.0], [0.036, 0.004, -0.006], LEAD.l, 0.0013, true);
@@ -330,7 +330,7 @@
       const nl = nameplate("부저", 0.012, 0.005, null, "#ffffff"); nl.position.set(0, 0.0071, 0.0045); g.add(nl);
       lead(o, "fc", [0, 0.003, -0.008], [0, 0.003, -0.018], LEAD.k, 0.0008, true);
     } else if (part.type === "switch") {
-      g.add(roundBox(0.014, 0.008, 0.014, M.plastic, 0, 0.004, 0, 0.0025), lathe([[0.0052, 0.0078], [0.0058, 0.0084], [0.0058, 0.0092], [0.005, 0.0096]], M.glow(0xff4630), 32), lathe([[0, 0.0084], [0.0046, 0.0084], [0.0046, 0.0112], [0.0038, 0.012], [0, 0.0121]], new T.MeshPhysicalMaterial({ color: new T.Color(0xc8382e), roughness: 0.3, clearcoat: 0.8 }), 32));
+      g.add(roundBox(0.014, 0.008, 0.014, M.plastic, 0, 0.004, 0, 0.0025), lathe([[0.0052, 0.0078], [0.0058, 0.0084], [0.0058, 0.0092], [0.005, 0.0096]], (o.ringMat = M.glow(0xff4630)), 32), lathe([[0, 0.0084], [0.0046, 0.0084], [0.0046, 0.0112], [0.0038, 0.012], [0, 0.0121]], new T.MeshPhysicalMaterial({ color: new T.Color(0xc8382e), roughness: 0.3, clearcoat: 0.8 }), 32));
       const nl = nameplate("안전 스위치", 0.014, 0.0035, null, "#ffffff"); nl.position.set(0, 0.0081, 0.0055); g.add(nl);
       lead(o, "fc", [0, 0.003, -0.007], [0, 0.003, -0.018], LEAD.r, 0.0008, true);
     } else if (part.type === "telem") {
@@ -625,8 +625,9 @@ const BIND_MSG = { held: "바인드 버튼을 누르고 있습니다. 이 상태
       link(tipPos(t[0], t[1]), fcPortPos(w.plug[c]), /^esc[A-Z]/.test(c) ? 0xf2f2f2 : CABLE_COL[c], 0.0013);
     }
     const mainAt = () => toDrone(objs.frameBot, PDB_MAIN.clone().add(new T.Vector3(0, 0, 0.005)));
-    curMeta = { label: "PMU 출력 XT60 → PDB 주전원 XT60", tip: { part: "pm", key: "out" } };
-    if (SIM.has("pm") && w.pmOut && SIM.has("frameBot")) { const a0 = tipPos("pm", "out"), b0 = mainAt(); link(a0, b0, RED, 0.0024); link(a0.clone().add(new T.Vector3(0.002, 0, 0.002)), b0.clone().add(new T.Vector3(0.002, 0, 0)), BLK, 0.0024); }
+    const xtAt = (xt) => { for (const pid of SIM.POS_IDS) { const i = SIM.XT_OF[pid].indexOf(xt); if (i >= 0) return xtLocal(pid, i); } return mainAt(); };
+    curMeta = { label: "PMU 출력 XT60 → PDB " + (w.pmOut === "ok" ? "주전원 XT60" : /^xt/.test(w.pmOut) ? SIM.xtName(w.pmOut) : ""), tip: { part: "pm", key: "out" } };
+    if (SIM.has("pm") && w.pmOut && SIM.has("frameBot")) { const a0 = tipPos("pm", "out"), b0 = w.pmOut === "ok" ? mainAt() : xtAt(w.pmOut); link(a0, b0, RED, 0.0024); link(a0.clone().add(new T.Vector3(0.002, 0, 0.002)), b0.clone().add(new T.Vector3(0.002, 0, 0)), BLK, 0.0024); }
     curMeta = { label: "배터리 XT60 → " + (w.batt === "pm" ? "PMU 입력 XT60" : "PDB 주전원 XT60"), tip: { part: "battery", key: "xt" } };
     if (SIM.has("battery") && w.batt === "pm" && SIM.has("pm")) link(tipPos("battery", "xt"), toDrone(objs.pm, objs.pm.pads.in), RED, 0.003);
     if (SIM.has("battery") && w.batt === "pdb" && SIM.has("frameBot")) { const a0 = tipPos("battery", "xt"), b0 = mainAt(); link(a0, b0, RED, 0.003); link(a0.clone().add(new T.Vector3(0.002, 0, 0.002)), b0.clone().add(new T.Vector3(0.002, 0, 0)), BLK, 0.003); }
@@ -991,7 +992,7 @@ const BIND_MSG = { held: "바인드 버튼을 누르고 있습니다. 이 상태
       if (escPos !== pos) return say("선이 닿지 않습니다.");
       w.motorWires[pos][tip.key[2]] = tg.pad; ok("plug");
     } else if (tg.kind === "pdbMain") { // XT60은 모양이 맞아 거꾸로 꽂히지 않는다
-      if (part.type === "pm" && tip.key === "out") w.pmOut = "ok";
+      if (part.type === "pm" && tip.key === "out") SIM.setPmXt("ok");
       else if (part.type === "battery") w.batt = "pdb";
       else return say("커넥터가 맞지 않습니다.");
       ok("xt");
@@ -1000,6 +1001,7 @@ const BIND_MSG = { held: "바인드 버튼을 누르고 있습니다. 이 상태
       const mPos = SIM.state.install[tg.part].split("@")[1]; if (mPos !== pos) return say("선이 닿지 않습니다.");
       w.motorWires[pos][tg.k] = tip.key[3]; ok("plug");
     } else if (tg.kind === "xt") {
+      if (part.type === "pm" && tip.key === "out") { SIM.setPmXt(tg.xt); ok("xt"); sc.cancelPick(); return; } // PMU 출력은 빈 XT60F 단자에도
       if (!(part.type === "esc" && tip.key === "pwr")) return say("커넥터가 맞지 않습니다.");
       if (tg.pos !== pos) return say("선이 닿지 않습니다.");
       SIM.setEscXt(pos, tg.xt); ok("xt"); sc.cancelPick(); return;
@@ -1047,6 +1049,7 @@ const BIND_MSG = { held: "바인드 버튼을 누르고 있습니다. 이 상태
   // 선을 든 채 FC·하판·수신기를 누르면: 커넥터가 선을 끌고 그곳으로 다가가고 카메라도 따라 다가간 뒤 세부 화면을 연다
   function approach(tg, point, done) {
     const tip = sc.pick, o = objs[tip.part];
+    if (!o || !o.tips[tip.key]) { sc.cancelPick(); done(); SIM.emit(); return; } // 3D 선 끝이 없는 선은 바로 세부 화면으로
     let to = point ? point.clone() : null;
     const top = (id) => { const bb = new T.Box3().setFromObject(objs[id].group), c = bb.getCenter(new T.Vector3()); c.y = bb.max.y + 0.01 * K; return c; };
     if (tg.kind === "fc" || (tg.kind === "rxDetail" && SIM.state.install.fc && tip.key === "sig")) to = top("fc");
@@ -1342,6 +1345,13 @@ const BIND_MSG = { held: "바인드 버튼을 누르고 있습니다. 이 상태
     }
     for (const p of SIM.PARTS) if (!SIM.state.install[p.id] && objs[p.id].disc) objs[p.id].disc.material.opacity = 0;
     if (selBox.visible && SIM.selected) selBox.setFromObject(objs[SIM.selected].group);
+    // 전원 표시등: FC 상태 LED(파랑 깜빡임 / GPS 잡히면 초록 / 시동 시 초록 고정), GPS LED 링, 안전 스위치 LED
+    { const pw = SIM.power(), w = SIM.state.wiring, tt = performance.now() / 1000, blink = Math.sin(tt * Math.PI * 2) > 0;
+      const setL = (m, on, col, k) => { if (!m) return; m.color.setHex(on ? col : 0x1f2226); m.emissive.setHex(col); m.emissiveIntensity = on ? k : 0; };
+      if (objs.fc) setL(objs.fc.statusMat, pw.fcBatt, SIM.flight.armed || SIM.gpsOk() ? 0x33ff66 : 0x3b8cff, SIM.flight.armed ? 2.4 : blink ? 2.4 : 0.2);
+      if (objs.gps) setL(objs.gps.ringMat, pw.fcBatt && !!w.plug.gps && SIM.cableReady("gps"), 0x37d67a, 1.2 + 1.2 * Math.max(0, Math.sin(tt * 3)));
+      if (objs.switch) setL(objs.switch.ringMat, pw.fcBatt && SIM.switchOk(), 0xff4630, SIM.safetyPressed ? 2.4 : blink ? 2.4 : 0.2);
+    }
     { const led = SIM.rxLed(), t = performance.now(), on = led === "green" || led === "red" || (led === "fast" && t % 200 < 100);
       const col = led === "green" ? 0x33ff66 : led === "off" ? 0x222222 : on ? 0xff3322 : 0x330000;
       objs.rx.led.material.color.setHex(col); objs.rx.ledGlow.material.color.setHex(led === "green" ? 0x33ff66 : 0xff3322); objs.rx.ledGlow.visible = on;
