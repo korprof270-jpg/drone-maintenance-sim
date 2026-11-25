@@ -352,6 +352,8 @@
       else if (type === "plug") { click(0, 3200, 0.025, 1.2); tone(2200, 0.004, 0.03, "triangle", 0.25); }
       else if (type === "xt") { click(0, 2000, 0.03, 1.2); click(0.06, 2600, 0.035, 1.3); tone(420, 0.06, 0.06, "square", 0.08); }
       else if (type === "powerup") { [880, 1109, 1319].forEach((f, i) => tone(f, i * 0.14, 0.12, "triangle", 0.3)); tone(1319, 0.8, 0.09, "triangle", 0.25); tone(1319, 1.0, 0.09, "triangle", 0.25); }
+      else if (type === "spark") { click(0, 4200, 0.03, 1.6); click(0.05 + Math.random() * 0.05, 5200, 0.025, 1.2); if (Math.random() < 0.5) click(0.13, 3600, 0.03, 1.1); }
+      else if (type === "burn") { for (let i = 0; i < 18; i++) click(i * 0.06 + Math.random() * 0.04, 2500 + Math.random() * 3500, 0.04, 1.6); tone(90, 0, 0.5, "sawtooth", 0.25); click(1.2, 800, 0.4, 0.6); } // 파바박
       else if (type === "escbeep") { tone(1760, 0, 0.16, "sine", 0.45); tone(880, 0, 0.16, "triangle", 0.12); } // 모터 권선에서 나는 ESC 경고음
       else if (type === "bind") { tone(1400, 0, 0.09, "sine", 0.4); tone(2100, 0.11, 0.14, "sine", 0.4); }
     } catch (e) {}

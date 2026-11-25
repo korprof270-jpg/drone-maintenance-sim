@@ -91,6 +91,7 @@
     [/FC 위치/, () => "자세 오차로 기체가 흐름"],
     [/GPS|나침반/, () => "Loiter·RTL 불가 또는 위치가 원을 그리며 흐름"],
     [/수신기/, () => "RC 신호 없음, 시동 불가"],
+    [/소손|과전압/, () => "FC 고장 — 실습 실패"],
     [/PMU|배터리/, () => "FC 전원·전압 정보 없음, 시동 불가 또는 저전압 경고 불가"],
     [/안전 스위치/, () => "시동 불가"],
     [/부저/, () => "시동·경고음을 들을 수 없음"],
@@ -188,7 +189,7 @@
       issues = ex.concat(issues);
     }
     const errs = issues.filter((i) => i.level === "오류").length, pre = SIM.prearm(0);
-    const rec = { issues, mode: S.exam ? "고장 진단" : "조립·정비", id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7), date: dateStr(end), name: S.exam ? S.name + " (고장 진단)" : S.name, seconds: sec, time: fmt(sec), start: timeStr(startD), end: timeStr(end), errors: errs, prearm: pre.length ? "불가 (" + pre.length + "건)" : "통과" };
+    const rec = { issues, mode: S.exam ? "고장 진단" : "조립·정비", id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7), date: dateStr(end), name: S.exam ? S.name + " (고장 진단)" : S.name, seconds: sec, time: fmt(sec), start: timeStr(startD), end: timeStr(end), errors: errs, prearm: SIM.state.fcBurned ? "실패 (FC 소손)" : pre.length ? "불가 (" + pre.length + "건)" : "통과" };
     S.running = false; S.final = sec; S.exam = null; $("#symptom-btn").hidden = true; persist();
     const recs = load(REC, []); recs.push(rec); save(REC, recs);
     const sent = await shareRecord(rec);

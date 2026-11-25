@@ -204,7 +204,7 @@
       },
       params,
       cal: { accel: false, compass: false, radio: false, esc: false },
-      rxBound: false, txCal: false, needReboot: false, bindHeld: false,
+      rxBound: false, txCal: false, needReboot: false, bindHeld: false, fcBurned: false, fcSparked: false,
       txm: { name: "MODEL01", mode: 2, rf: "OFF", proto: "FrSky X", failsafe: "Not set", mix: { 1: "Thr", 2: "Ail", 3: "Ele", 4: "Rud", 5: "", 6: "", 7: "", 8: "" }, inv: {} },
     };
   }
@@ -343,14 +343,15 @@
 
   // ---------- 전원·신호 경로 ----------
   SIM.power = () => {
-    const st = SIM.state, w = st.wiring, batt = SIM.has("battery"), pm = SIM.has("pm"), fc = SIM.has("fc");
+    const st = SIM.state, w = st.wiring, batt = SIM.has("battery"), pm = SIM.has("pm"), fc = SIM.has("fc") && !st.fcBurned; // 타 버린 FC는 켜지지 않는다
     const viaPm = batt && pm && w.batt === "pm";
     const reverse = viaPm && w.pmOut === "rev";
     const pmToPdb = pm && SIM.has("frameBot") && (w.pmOut === "ok" || /^xt/.test(w.pmOut));
     const pdb = SIM.has("frameBot") && batt && ((viaPm && pmToPdb) || w.batt === "pdb");
     const pmOn = pm && batt && (viaPm || (pmToPdb && pdb)); // PMU는 배터리 쪽에서든 PDB 쪽에서든 전원을 받으면 켜진다
-    const fcBatt = fc && pmOn && w.plug.pm === "POWER";
-    return { pdb, main: pdb, reverse, fc, pmOn, fcBatt, battSense: fcBatt && st.params.BATT_MONITOR !== 0 };
+    const raw = fc && pdb && !pmOn; // PMU 없이 배터리 전압이 FC에 그대로 들어감 → 과전압으로 손상
+    const fcBatt = fc && ((pmOn && w.plug.pm === "POWER") || raw);
+    return { pdb, main: pdb, reverse, fc, pmOn, raw, fcBatt, battSense: fcBatt && pmOn && st.params.BATT_MONITOR !== 0 };
   };
   SIM.gpsOk = () => SIM.has("gps") && SIM.serialProto(SIM.state.wiring.plug.gps) === 5;
   SIM.telemOk = () => SIM.has("telem") && [1, 2].includes(SIM.serialProto(SIM.state.wiring.plug.telem));
@@ -380,6 +381,14 @@
     if (powered && !SIM._rxWas && SIM.state.bindHeld) { SIM.state.bindHeld = false; SIM.binding = now; SIM.bindUntil = now + 10000; }
     if (SIM._fcWas && !fc && SIM.state.needReboot) { SIM.state.needReboot = false; }
     const pdbNow = SIM.power().pdb; if (pdbNow && !SIM._pdbWas) { if (SIM.sfx) SIM.sfx("powerup"); SIM._pdbOnAt = now; } SIM._pdbWas = pdbNow; // 전원이 들어오면 ESC 시작음
+    // PMU 없이 배터리 전원이 FC에 직접 들어가면: 15초 뒤부터 간헐적 불꽃, 40초에 FC 소손(불꽃·연기, 작동 불가) → 실패
+    const raw = SIM.power().raw;
+    if (raw) {
+      if (!SIM._rawStart) SIM._rawStart = now;
+      const el = now - SIM._rawStart;
+      if (el > 40000) { SIM.state.fcBurned = true; SIM.state.fcSparked = true; SIM._rawStart = 0; SIM.burnAt = now; if (SIM.sfx) SIM.sfx("burn"); if (SIM.toast) SIM.toast("FC에서 불꽃과 연기가 나며 꺼졌습니다. FC가 타 버려 작동하지 않습니다.", "bad"); SIM.emit(); }
+      else if (el > 15000 && now > (SIM._nextSpark || 0)) { SIM.state.fcSparked = true; SIM.sparkAt = now; SIM._nextSpark = now + 700 + Math.random() * (el > 30000 ? 900 : 2200); if (SIM.sfx) SIM.sfx("spark"); }
+    } else SIM._rawStart = 0;
     // ESC 경고음: 전원은 들어왔는데 FC 신호가 없거나 ESC 캘리브레이션이 안 된 ESC가 있으면 '삑…삑…' (모터가 돌 때는 멈춤)
     SIM.escWarn = pdbNow && SIM.POS_IDS.some((p) => SIM.has("esc@" + p) && SIM.escPowered(p) && (!SIM.escSignal(p) || !SIM.state.cal.esc));
     const spinning = SIM.motorU && SIM.POS_IDS.some((p) => (SIM.motorU[p] || 0) > 0.02);
@@ -445,6 +454,8 @@
     const st = SIM.state, w = st.wiring, out = [], exp = SIM.expected();
     const add = (lvl, t, d) => out.push({ lvl, t, d });
     const dirKo = (d) => (d === "cw" ? "시계(CW)" : "반시계(CCW)");
+    if (st.fcBurned) add("bad", "비행 컨트롤러 소손", "PMU 없이 배터리 전원을 FC에 직접 넣어 과전압으로 FC가 타 버렸습니다 (실습 실패).");
+    else if (st.fcSparked) add("warn", "비행 컨트롤러 과전압", "PMU 없이 배터리 전원을 FC에 직접 넣어 FC에서 불꽃이 났습니다 (소손 직전에 전원 분리).");
     for (const [id, n] of [["frameBot", "하판"], ["frameTop", "상판"], ["skid", "스키드"]]) if (!SIM.has(id)) add("bad", n, "장착되지 않았습니다.");
     if (SIM.has("frameTop") && !SIM.has("canopy")) add("warn", "케이스", "씌우지 않았습니다. 비·먼지·약제가 전자부품에 닿습니다.");
     for (const p of SIM.POS_IDS) { const a = SIM.partAt("arm@" + p); if (!a) add("bad", SIM.POS[p].name + " 붐대", "장착되지 않았습니다."); else if ((SIM.POS[p].z < 0) !== (a.color === "red")) add("warn", SIM.POS[p].name + " 붐대 색", (a.color === "red" ? "빨간" : "흰") + " 붐대입니다. 앞쪽 붐대를 빨간색으로 맞춰야 조종할 때 기수 방향을 알아볼 수 있습니다."); }

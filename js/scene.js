@@ -1310,8 +1310,55 @@ const BIND_MSG = { held: "바인드 버튼을 누르고 있습니다. 이 상태
     let dth = gl.theta - orbit.theta; dth = Math.atan2(Math.sin(dth), Math.cos(dth)); orbit.theta += dth * k;
     if (orbit.target.distanceTo(gl.target) < 0.002 && Math.abs(gl.dist - orbit.dist) < 0.002 && Math.abs(gl.phi - orbit.phi) < 0.002) sc.camGoal = null;
   }
+  // ---------- FC 과전압 효과: 불꽃(가산 스프라이트)·섬광(점광원)·연기·그을음 ----------
+  const fx = { parts: [], lastSpark: 0, lastBurn: 0, burnLeft: 0, smokeT: 0, light: null, scorch: false };
+  const dotTex = (inner, outer) => canvasTex(64, 64, (c) => { const gr = c.createRadialGradient(32, 32, 0, 32, 32, 32); gr.addColorStop(0, inner); gr.addColorStop(0.4, outer); gr.addColorStop(1, "rgba(0,0,0,0)"); c.fillStyle = gr; c.fillRect(0, 0, 64, 64); });
+  let sparkTex, smokeTex;
+  const fcTop = () => { const bb = new T.Box3().setFromObject(objs.fc.group), c = bb.getCenter(new T.Vector3()); c.y = bb.max.y; return c; };
+  function spawnSparks(n, big) {
+    sparkTex = sparkTex || dotTex("rgba(255,255,230,1)", "rgba(255,170,40,0.9)");
+    const o = fcTop();
+    for (let i = 0; i < n; i++) {
+      const m = new T.SpriteMaterial({ map: sparkTex, color: new T.Color().setHSL(0.08 + Math.random() * 0.06, 1, 0.6), transparent: true, depthWrite: false, blending: T.AdditiveBlending });
+      const sp = new T.Sprite(m), s0 = (0.01 + Math.random() * 0.018) * (big ? 1.6 : 1); sp.scale.set(s0, s0, 1); sp.raycast = () => {}; sp.renderOrder = 30;
+      sp.position.copy(o).add(new T.Vector3((Math.random() - 0.5) * 0.12, 0.005, (Math.random() - 0.5) * 0.2));
+      const a = Math.random() * Math.PI * 2, up = 0.6 + Math.random() * (big ? 2.2 : 1.2), side = 0.3 + Math.random() * (big ? 1.4 : 0.8);
+      scene.add(sp); fx.parts.push({ sp, v: new T.Vector3(Math.cos(a) * side, up, Math.sin(a) * side), life: 0.35 + Math.random() * (big ? 0.9 : 0.5), age: 0, kind: "spark", s0 });
+    }
+    if (!fx.light) { fx.light = new T.PointLight(0xffa040, 0, 3, 2); scene.add(fx.light); }
+    fx.light.position.copy(o).add(new T.Vector3(0, 0.08, 0)); fx.light.intensity = big ? 9 : 5;
+  }
+  function spawnSmoke(heavy) {
+    smokeTex = smokeTex || dotTex("rgba(55,55,58,0.95)", "rgba(70,70,74,0.5)");
+    const o = fcTop(), m = new T.SpriteMaterial({ map: smokeTex, color: 0x5a5a5e, transparent: true, opacity: heavy ? 0.85 : 0.55, depthWrite: false });
+    const sp = new T.Sprite(m), s0 = 0.06 + Math.random() * 0.05; sp.scale.set(s0, s0, 1); sp.raycast = () => {}; sp.renderOrder = 25;
+    sp.position.copy(o).add(new T.Vector3((Math.random() - 0.5) * 0.1, 0.01, (Math.random() - 0.5) * 0.16)); scene.add(sp);
+    fx.parts.push({ sp, v: new T.Vector3((Math.random() - 0.5) * 0.08, 0.25 + Math.random() * 0.2, (Math.random() - 0.5) * 0.08), life: 2.6 + Math.random() * 1.6, age: 0, kind: "smoke", s0, op: m.opacity });
+  }
+  function stepFx(dt) {
+    if (SIM.sparkAt && SIM.sparkAt !== fx.lastSpark) { fx.lastSpark = SIM.sparkAt; spawnSparks(10 + Math.floor(Math.random() * 10), false); }
+    if (SIM.burnAt && SIM.burnAt !== fx.lastBurn) { fx.lastBurn = SIM.burnAt; fx.burnLeft = 1.4; spawnSparks(70, true); }
+    if (fx.burnLeft > 0) { fx.burnLeft -= dt; if (Math.random() < 0.45) spawnSparks(8, true); }
+    const burned = SIM.state.fcBurned;
+    if (burned) { fx.smokeT -= dt; const heavy = SIM.burnAt && performance.now() - fx.lastBurn < 60000; if (fx.smokeT <= 0) { spawnSmoke(heavy); fx.smokeT = heavy ? 0.12 : 0.35; } }
+    // 그을음: 타 버린 FC는 표면 전체가 검게 그을린다 (원래 재질은 보관했다가 초기화 시 되돌림)
+    if (burned !== !!fx.scorch) {
+      fx.scorch = burned;
+      objs.fc.group.traverse((m) => { if (!m.isMesh || m.material === HIT) return; if (burned) { m.userData.mat0 = m.material; const c = m.material.clone(); if (c.color) c.color.multiplyScalar(0.28).lerp(new T.Color(0x2a1a0c), 0.25); if (c.emissive) c.emissiveIntensity = 0; if ("roughness" in c) c.roughness = 0.95; if ("clearcoat" in c) c.clearcoat = 0; m.material = c; } else if (m.userData.mat0) { m.material.dispose(); m.material = m.userData.mat0; delete m.userData.mat0; } });
+    }
+    if (fx.light && fx.light.intensity > 0) fx.light.intensity = Math.max(0, fx.light.intensity - dt * 40);
+    for (let i = fx.parts.length - 1; i >= 0; i--) {
+      const q = fx.parts[i]; q.age += dt; const u = q.age / q.life;
+      if (u >= 1) { scene.remove(q.sp); q.sp.material.dispose(); fx.parts.splice(i, 1); continue; }
+      if (q.kind === "spark") { q.v.y -= 5 * dt; q.sp.position.addScaledVector(q.v, dt); q.sp.material.opacity = 1 - u; }
+      else { q.sp.position.addScaledVector(q.v, dt); const k = q.s0 * (1 + u * 3); q.sp.scale.set(k, k, 1); q.sp.material.opacity = q.op * (1 - u); }
+    }
+  }
+  sc.fxCount = () => fx.parts.length;
+
   sc.update = function (dt, skipRender) {
     stepApproach(dt);
+    stepFx(dt);
     tweenCam(dt);
     adaptQuality(dt);
     const k = 1 - Math.exp(-12 * dt);
