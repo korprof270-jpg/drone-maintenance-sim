@@ -669,9 +669,9 @@
     () => { const i = SIM.state.install; i.rx = "bot:C"; i.fc = "deck:L"; return { desc: "FC가 상판 중앙이 아닌 상판 왼쪽에 장착되어 있습니다.", present: () => SIM.fcOffCenter() }; },
     () => { const i = SIM.state.install, t = i.telem; i.telem = "bot:R"; i.gps = t; return { desc: "GPS·나침반 모듈이 마스트가 아닌 상판 위에 직접 장착되어 있습니다 (자기 간섭).", present: () => SIM.gpsOffMast() }; },
     () => { SIM.state.rot.gps = 2; return { desc: "GPS·나침반 모듈이 뒤를 향해 장착되어 있습니다.", present: () => Math.abs(Math.sin(SIM.headingErr() / 2)) > 0.01 }; },
-    () => { SIM.state.wiring.plug.rx = "SBUS OUT"; return { desc: "수신기 신호선이 RC IN이 아닌 SBUS OUT 포트에 꽂혀 있습니다.", present: () => !SIM.rxOk() }; },
-    () => { SIM.state.wiring.rxRevFc = true; return { desc: "수신기 3선 커넥터가 FC 쪽에서 반대로 꽂혀 있습니다.", present: () => !SIM.rxOk() }; },
-    () => { SIM.state.wiring.rxEnd = "1"; return { desc: "수신기 쪽 커넥터가 SBUS가 아닌 채널 1(PWM) 핀에 꽂혀 있습니다.", present: () => !SIM.rxOk() }; },
+    () => { SIM.state.wiring.plug.rx = "SBUS OUT"; return { desc: "수신기 신호선이 RC IN이 아닌 SBUS OUT 포트에 꽂혀 있습니다.", present: () => SIM.state.wiring.plug.rx !== "RC IN" }; },
+    () => { SIM.state.wiring.rxRevFc = true; return { desc: "수신기 3선 커넥터가 FC 쪽에서 반대로 꽂혀 있습니다.", present: () => SIM.state.wiring.rxRevFc || !SIM.state.wiring.plug.rx }; },
+    () => { SIM.state.wiring.rxEnd = "1"; return { desc: "수신기 쪽 커넥터가 SBUS가 아닌 채널 1(PWM) 핀에 꽂혀 있습니다.", present: () => SIM.state.wiring.rxEnd !== "SB" }; },
     () => { SIM.state.rxBound = false; return { desc: "수신기가 송신기와 바인딩되어 있지 않습니다.", present: () => !SIM.state.rxBound }; },
     () => { const w = SIM.state.wiring; w.plug.gps = w.plug.telem === "TELEM2" ? "TELEM1" : "TELEM2"; return { desc: "GPS 케이블이 TELEM 포트에 꽂혀 있습니다.", present: () => !SIM.gpsOk() }; },
     () => { SIM.state.wiring.plug.switch = "ADC 3.3V"; return { desc: "안전 스위치 케이블이 SWITCH가 아닌 ADC 3.3V 포트에 꽂혀 있습니다.", present: () => SIM.state.params.BRD_SAFETYENABLE === 1 && !SIM.switchOk() }; },
@@ -713,7 +713,7 @@
     rnd = seeded(seed || 1);
     try { return ids.filter((i) => FAULTS[i]).map((i) => Object.assign({ id: i, name: SIM.FAULT_INFO[i][0] }, FAULTS[i]())); } finally { rnd = Math.random; }
   };
-  SIM.startExam = (ids, seed) => { SIM.autoAssemble(); SIM.autoConfigure(); const list = SIM.injectFaults(ids, seed); SIM.motorTest && (SIM.motorTest.results = {}); SIM.state.safety = { live: 0, prop: 0, t: {} }; SIM.safetyBaseline(); SIM.emit(); return list; };
+  SIM.startExam = (ids, seed) => { SIM.autoAssemble(); SIM.autoConfigure(); const list = SIM.injectFaults(ids, seed); SIM.motorTest && (SIM.motorTest.results = {}); SIM.state.wiring.batt = ""; SIM.state.safety = { live: 0, prop: 0, t: {} }; SIM.safetyBaseline(); SIM.emit(); return list; }; // 시험은 배터리를 뺀 상태로 시작
   // 새로고침 뒤: 지금 상태는 그대로 두고 판정용 함수만 다시 만든다
   SIM.examChecks = (ids, seed) => { const keep = JSON.stringify(SIM.state); SIM.autoAssemble(); SIM.autoConfigure(); const list = SIM.injectFaults(ids, seed); SIM.state = JSON.parse(keep); SIM.emit(); return list; };
   SIM.startFaultDrill = (n) => {
