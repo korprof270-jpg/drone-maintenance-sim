@@ -21,6 +21,7 @@
       <button type="button" id="admin-btn" class="btn" data-act="adminOpen" hidden>기록 관리</button>
       <button type="button" id="exam-btn" class="btn" data-act="examBuilder" hidden>시험 만들기</button>
       <button type="button" id="symptom-btn" class="btn primary" data-act="symptoms" hidden>증상</button>
+      <button type="button" id="help-btn" class="btn ghost helpbtn" data-act="helpOpen" aria-label="조작법 안내">?</button>
       <span id="trainee" class="trainee"></span>
       <span id="timer" class="timer" aria-label="경과 시간">00:00</span>
     </div>
@@ -73,6 +74,17 @@
     <button type="button" id="intro-admin" class="btn ghost intro-admin" data-act="examBuilder" hidden>관리자 · 고장 진단 시험 만들기</button>
   </div>
 </div>
+<div id="help" class="modal helpmodal" hidden><div class="modal-card helpcard">
+  <h2>조작법 안내</h2>
+  <div class="helpgrid">
+    <section><h3>🖱 화면 보기</h3><ul><li><b>빈 곳 끌기</b>: 시점 돌리기</li><li><b>휠</b>: 확대·축소</li><li><b>빈 곳 더블클릭</b>: 처음 시점으로</li><li>가장 앞(바깥)에 있는 물체가 눌립니다. 가려진 부품은 시점을 돌리거나 위 부품을 떼고 누르세요.</li></ul></section>
+    <section><h3>🔧 부품 장착</h3><ul><li><b>부품을 눌러 끌기</b>: 장착할 자리 근처로 가져가면 노란 고리가 표시되고, 놓으면 붙습니다.</li><li>작업대 빈 곳에 놓으면 내려놓습니다.</li><li><b>부품 클릭</b>: 정보창(돌리기·뒤집기·선 연결 등)</li></ul></section>
+    <section><h3>🔌 선 연결</h3><ul><li><b>선 끝(커넥터)을 눌러 집고</b> → 꽂을 곳을 누르거나 끌어다 놓기</li><li>선 끝이 작거나 가려지면 정보창의 <b>선 연결</b> 버튼</li><li>선을 든 채 <b>FC·하판·수신기</b>를 누르면 세부 화면에서 자리를 고릅니다.</li><li><b>Esc</b>: 들고 있는 선 놓기 · 연결된 선을 누르면 분리 메뉴</li></ul></section>
+    <section><h3>📋 진행</h3><ul><li>위쪽 <b>‹ ›</b> 버튼: 하드웨어 설정 → 소프트웨어 설정 → 테스트</li><li>소프트웨어 설정은 오른쪽 메뉴에서 차례대로</li><li>작업대의 <b>조종기</b>를 누르면 조종기 화면</li><li>마지막 단계에서 <b>완료</b> → <b>종료</b>를 누르면 기록이 관리자에게 전송됩니다.</li></ul></section>
+  </div>
+  <p class="muted">이 안내는 위쪽 <b>?</b> 버튼으로 언제든 다시 볼 수 있습니다.</p>
+  <div class="btns"><button type="button" class="btn primary" data-act="helpClose">시작하기</button></div>
+</div></div>
 <div id="finish" class="modal" hidden><div class="modal-card" id="finish-card"></div></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script type="importmap">{ "imports": { "three": "./vendor/three/build/three.module.min.js", "three/addons/": "./vendor/three/addons/" } }</script>

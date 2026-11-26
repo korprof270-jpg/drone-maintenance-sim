@@ -307,3 +307,12 @@ body:not(.dock) .navgroup { display: none; }
 .tray .small { font-size: 12px; margin: 0 0 4px; }
 .leadbtns { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; width: 100%; }
 .leadbtns .small { font-size: 12px; width: 100%; }
+/* 조작법 안내 */
+.helpmodal { z-index: 70; }
+.helpcard { width: min(820px, 100%); }
+.helpgrid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+@media (max-width: 640px) { .helpgrid { grid-template-columns: 1fr; } }
+.helpgrid section { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+.helpgrid h3 { margin: 0 0 6px; font-size: 14px; }
+.helpgrid ul { margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.6; }
+.helpbtn { min-width: 32px; font-weight: 700; }

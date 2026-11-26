@@ -231,7 +231,20 @@
 
   const listeners = [];
   SIM.on = (fn) => listeners.push(fn);
+  // ---------- 안전 위반 기록 (교육생에게는 표시하지 않고 채점에만 반영) ----------
+  // live: 전원(배터리)이 들어온 채 배선·부품을 바꿈 / prop: 프로펠러를 단 채 모터 테스트. 같은 종류는 10초 안에 한 번만 센다
+  SIM.safetyViolation = (kind) => { const st = SIM.state, sf = st.safety || (st.safety = { live: 0, prop: 0, t: {} }); const now = Date.now(); if (now - (sf.t[kind] || 0) < 10000) return; sf.t[kind] = now; sf[kind] = (sf[kind] || 0) + 1; };
+  let sigState = null, lastSig = "", lastPw = false;
+  const safetySig = () => { const st = SIM.state, w = Object.assign({}, st.wiring), ins = Object.assign({}, st.install); delete w.batt; delete ins.battery; return JSON.stringify([ins, w, st.rot, st.flip]); }; // 배터리 연결·분리 자체는 제외
+  SIM.safetyBaseline = () => { sigState = null; }; // 자동 조립·시험 시작처럼 교육생 조작이 아닌 변경
+  function safetyWatch() {
+    if (!SIM.power) return;
+    if (sigState !== SIM.state) { sigState = SIM.state; lastSig = safetySig(); lastPw = SIM.power().pdb; return; }
+    const sg = safetySig(); if (sg !== lastSig) { if (lastPw) SIM.safetyViolation("live"); lastSig = sg; }
+    lastPw = SIM.power().pdb;
+  }
   SIM.emit = () => {
+    try { safetyWatch(); } catch (e) {}
     try { localStorage.setItem(KEY, JSON.stringify(SIM.state)); } catch (e) {}
     listeners.forEach((f) => f());
   };
@@ -620,7 +633,7 @@
     w.batt = "pm"; w.pmOut = "ok"; w.rxEnd = "SB"; w.rxRevRx = false; w.rxRevFc = false; st.rxBound = true;
     SIM.fastenAll();
     SIM.selected = null;
-    SIM.emit();
+    SIM.safetyBaseline(); SIM.emit();
   };
   SIM.autoConfigure = () => {
     const st = SIM.state, p = st.params, tx = SIM.TX;
@@ -700,7 +713,7 @@
     rnd = seeded(seed || 1);
     try { return ids.filter((i) => FAULTS[i]).map((i) => Object.assign({ id: i, name: SIM.FAULT_INFO[i][0] }, FAULTS[i]())); } finally { rnd = Math.random; }
   };
-  SIM.startExam = (ids, seed) => { SIM.autoAssemble(); SIM.autoConfigure(); const list = SIM.injectFaults(ids, seed); SIM.motorTest && (SIM.motorTest.results = {}); SIM.emit(); return list; };
+  SIM.startExam = (ids, seed) => { SIM.autoAssemble(); SIM.autoConfigure(); const list = SIM.injectFaults(ids, seed); SIM.motorTest && (SIM.motorTest.results = {}); SIM.state.safety = { live: 0, prop: 0, t: {} }; SIM.safetyBaseline(); SIM.emit(); return list; };
   // 새로고침 뒤: 지금 상태는 그대로 두고 판정용 함수만 다시 만든다
   SIM.examChecks = (ids, seed) => { const keep = JSON.stringify(SIM.state); SIM.autoAssemble(); SIM.autoConfigure(); const list = SIM.injectFaults(ids, seed); SIM.state = JSON.parse(keep); SIM.emit(); return list; };
   SIM.startFaultDrill = (n) => {
@@ -708,6 +721,6 @@
     const pool = FAULTS.slice(), list = [];
     while (list.length < n && pool.length) list.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]());
     SIM.faults = { list, revealed: false };
-    SIM.emit();
+    SIM.safetyBaseline(); SIM.emit();
   };
 })();

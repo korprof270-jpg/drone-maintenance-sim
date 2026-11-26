@@ -347,6 +347,7 @@
     const pw = SIM.power();
     if (!pw.fc) return "FC가 연결되지 않았습니다.";
     if (!SIM.safetyOff()) return "Motor Test: Safety switch (안전 스위치가 해제되지 않음)";
+    if (SIM.POS_IDS.some((p) => SIM.partAt("prop@" + p))) SIM.safetyViolation("prop"); // 프로펠러를 단 채 모터 테스트 (기록만)
     MT.queue = letters.map((l) => ({ l, pct, dur }));
     MT.cur = null;
     return "";

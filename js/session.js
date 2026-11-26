@@ -109,9 +109,9 @@
   }
 
   // ----- 엑셀(.xlsx) 만들기와 저장 -----
-  const COLS = [["date", "날짜"], ["name", "이름"], ["time", "소요 시간"], ["seconds", "소요 시간(초)"], ["start", "시작 시각"], ["end", "완료 시각"], ["errors", "오류(건)"], ["prearm", "시동 전 점검"]];
+  const COLS = [["date", "날짜"], ["name", "이름"], ["score", "점수"], ["result", "결과"], ["time", "소요 시간"], ["seconds", "소요 시간(초)"], ["start", "시작 시각"], ["end", "완료 시각"], ["errors", "오류(건)"], ["prearm", "시동 전 점검"]];
   function workbook(date, rows) {
-    const data = rows.map((r) => Object.fromEntries(COLS.map(([k, n]) => [n, r[k]])));
+    const data = rows.map((r) => Object.fromEntries(COLS.map(([k, n]) => [n, k === "result" ? (r.score === undefined ? "" : r.pass ? "합격" : "불합격") : r[k]])));
     const DCOLS = [["name", "이름"], ["area", "구분"], ["level", "등급"], ["item", "항목"], ["detail", "무엇이 문제인가"], ["effect", "발생하는 문제"]];
     const detail = [];
     rows.forEach((r) => { const list = r.issues || []; if (!list.length) detail.push({ name: r.name, area: "-", level: "-", item: "문제 없음", detail: "", effect: "" }); list.forEach((i) => detail.push(Object.assign({ name: r.name }, i))); });
@@ -163,6 +163,7 @@
     $("#intro").hidden = true; $("#finish").hidden = true;
     $("#trainee").textContent = S.name;
     if (SIM.ui && SIM.ui.ACT_go) SIM.ui.ACT_go("hw");
+    if (!load("drone-sim-help-seen", 0)) $("#help").hidden = false; // 처음 시작할 때 한 번 조작법 안내
     S.exam = null; checks = null; $("#symptom-btn").hidden = !EXAM;
     if (EXAM) { checks = SIM.startExam(EXAM.f, EXAM.s); S.exam = { code: qs.get("exam"), answers: EXAM.f.map(() => "") }; persist(); showSymptoms(true); }
   }
@@ -188,8 +189,16 @@
       const ex = checks.map((c, i) => { const fixed = !c.present(); return { area: "고장 진단", level: fixed ? "해결" : "오류", item: "증상 " + (i + 1) + ": " + symptomOf(i), detail: "실제 원인: " + c.desc + " / 교육생 답: " + (String(S.exam.answers[i] || "").trim() || "(작성 안 함)"), effect: fixed ? "고장을 고쳤습니다" : "고장이 그대로 남아 있습니다" }; });
       issues = ex.concat(issues);
     }
+    // ----- 채점: 100점 감점식, 70점 이상 합격, FC 소손은 0점 (교육생에게는 보이지 않고 기록에만) -----
+    const sf = SIM.state.safety || {}, burned = !!SIM.state.fcBurned, ded = [];
+    if (S.exam && checks) { const left = issues.filter((i) => i.area === "고장 진단" && i.level === "오류").length; if (left) ded.push(["미해결 고장 " + left + "건", left * Math.round(100 / checks.length)]); }
+    else { const e = issues.filter((i) => i.level === "오류").length, wn = issues.filter((i) => i.level === "주의").length; if (e) ded.push(["오류 " + e + "건 × 10", e * 10]); if (wn) ded.push(["주의 " + wn + "건 × 3", wn * 3]); }
+    if (sf.live) { ded.push(["안전 위반: 전원 연결 중 작업 " + sf.live + "회 × 20", sf.live * 20]); issues.push({ area: "안전", level: "위반", item: "전원(배터리)을 연결한 채 배선·부품 작업 " + sf.live + "회", detail: "배터리를 분리하지 않고 배선을 꽂거나 빼거나 부품을 장착·분리했습니다.", effect: "쇼트·감전·부품 손상 위험" }); }
+    if (sf.prop) { ded.push(["안전 위반: 프로펠러 장착 상태 모터 테스트 " + sf.prop + "회 × 20", sf.prop * 20]); issues.push({ area: "안전", level: "위반", item: "프로펠러를 단 채 모터 테스트 " + sf.prop + "회", detail: "작업대에서 프로펠러를 떼지 않고 모터를 돌렸습니다.", effect: "프로펠러에 의한 부상 위험" }); }
+    const score = burned ? 0 : Math.max(0, 100 - ded.reduce((a, d) => a + d[1], 0)), pass = !burned && score >= 70;
+    issues.unshift({ area: "채점", level: pass ? "합격" : "불합격", item: "총점 " + score + "점 (합격 기준 70점)", detail: burned ? "FC 소손으로 0점" : ded.length ? ded.map((d) => d[0] + " = −" + d[1]).join(", ") : "감점 없음", effect: pass ? "합격" : "불합격" });
     const errs = issues.filter((i) => i.level === "오류").length, pre = SIM.prearm(0);
-    const rec = { issues, mode: S.exam ? "고장 진단" : "조립·정비", id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7), date: dateStr(end), name: S.exam ? S.name + " (고장 진단)" : S.name, seconds: sec, time: fmt(sec), start: timeStr(startD), end: timeStr(end), errors: errs, prearm: SIM.state.fcBurned ? "실패 (FC 소손)" : pre.length ? "불가 (" + pre.length + "건)" : "통과" };
+    const rec = { score, pass, issues, mode: S.exam ? "고장 진단" : "조립·정비", id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7), date: dateStr(end), name: S.exam ? S.name + " (고장 진단)" : S.name, seconds: sec, time: fmt(sec), start: timeStr(startD), end: timeStr(end), errors: errs, prearm: score + "점 " + (pass ? "합격" : "불합격") + " · " + (burned ? "실패 (FC 소손)" : pre.length ? "시동 불가 (" + pre.length + "건)" : "시동 전 점검 통과") };
     S.running = false; S.final = sec; S.exam = null; $("#symptom-btn").hidden = true; persist();
     const recs = load(REC, []); recs.push(rec); save(REC, recs);
     const sent = await shareRecord(rec);
@@ -219,7 +228,7 @@
     if (!day.length) h += '<p class="muted">아직 기록이 없습니다.</p>';
     for (const r of day) {
       const bad = (r.issues || []).filter((i) => i.level === "오류"), warn = (r.issues || []).filter((i) => i.level === "주의");
-      h += '<details class="admrec"><summary><b>' + esc(r.name) + "</b><span>" + r.time + "</span><span>" + r.start + "–" + r.end + '</span><span class="chip ' + (bad.length ? "bad" : "ok") + '">오류 ' + bad.length + "</span>" + (warn.length ? '<span class="chip warn">주의 ' + warn.length + "</span>" : "") + "</summary>" +
+      h += '<details class="admrec"><summary><b>' + esc(r.name) + "</b>" + (r.score !== undefined ? '<span class="chip ' + (r.pass ? "ok" : "bad") + '">' + r.score + "점 " + (r.pass ? "합격" : "불합격") + "</span>" : "") + "<span>" + r.time + "</span><span>" + r.start + "–" + r.end + '</span><span class="chip ' + (bad.length ? "bad" : "ok") + '">오류 ' + bad.length + "</span>" + (warn.length ? '<span class="chip warn">주의 ' + warn.length + "</span>" : "") + "</summary>" +
         ((r.issues || []).length ? '<table class="tbl"><thead><tr><th>구분</th><th>항목</th><th>무엇이 문제인가</th><th>발생하는 문제</th></tr></thead><tbody>' + r.issues.map((i) => "<tr><td>" + esc(i.area) + "</td><td>" + esc(i.item) + "</td><td>" + esc(i.detail) + "</td><td>" + esc(i.effect) + "</td></tr>").join("") + "</tbody></table>" : '<p class="muted">문제 없음</p>') + "</details>";
     }
     $("#finish-card").innerHTML = h;
@@ -243,6 +252,8 @@
     else if (a === "sessionRetry") { b.disabled = true; const left = await sendPending(); SIM.toast(left ? "아직 보내지 못했습니다." : "기록을 보냈습니다.", left ? "bad" : "ok"); if (!left) b.remove(); else b.disabled = false; }
     else if (a === "sessionNew") { $("#finish").hidden = true; S.name = ""; S.running = false; S.final = 0; persist(); showIntro("name"); }
     else if (a === "adminOpen") openAdmin();
+    else if (a === "helpOpen") $("#help").hidden = false;
+    else if (a === "helpClose") { $("#help").hidden = true; save("drone-sim-help-seen", 1); }
     else if (a === "examBuilder") openBuilder();
     else if (a === "examMake") makeExam();
     else if (a === "examCopy") { const i = $("#exam-link"); i.select(); try { await navigator.clipboard.writeText(i.value); SIM.toast("링크를 복사했습니다.", "ok"); } catch (e2) { document.execCommand && document.execCommand("copy"); SIM.toast("링크를 복사했습니다.", "ok"); } }
